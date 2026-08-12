@@ -1,0 +1,26 @@
+{
+  "name": "@helm/backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "db:migrate": "bun src/db/migrate.ts",
+    "db:reset": "bun src/db/reset.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun src/middleware/role.test.ts",
+    "build": "bun build src/index.ts --outdir=dist --target=bun --external @helm/shared"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cron-parser": "^4.9.0",
+    "hono": "^4.6.0",
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/bun": "^1.1.0",
+    "typescript": "^5.6.0"
+  }
+}

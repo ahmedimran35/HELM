@@ -1,0 +1,101 @@
+# docker-compose.yml — zero-config deployment for HELM
+#
+# Brings up the whole stack with one command:
+#   docker compose up -d
+#
+# Services:
+#   postgres     Postgres 16 database
+#   redis        Redis 7 (quotas / future WS pub/sub)
+#   lightpanda   Headless browser (Zig + V8) — the live-data web
+#                search engine. The api container reaches it at
+#                http://lightpanda:9222 (CDP). The api auto-configures
+#                it on first boot if no provider is configured yet.
+#   api          HELM backend (Hono on Bun)
+#
+# The api container runs migrations on startup, seeds the admin account
+# from $ADMIN_USERNAME / $ADMIN_PASSWORD, and auto-configures Lightpanda
+# as the web-search provider so the org has free, real-data search out
+# of the box. End users never see a provider name.
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: helm
+      POSTGRES_PASSWORD: helm_dev
+      POSTGRES_DB: helm
+    volumes:
+      - helm_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U helm -d helm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    volumes:
+      - helm_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Lightpanda headless browser — 9x faster and 16x less memory than
+  # Headless Chrome per the project's own benchmarks. Provides real-data
+  # web search by rendering pages (JS, dynamic SPAs, cookie banners)
+  # before extracting content. Completely free, no API key.
+  # The api container reaches it on the internal Docker network.
+  # To use a remote Lightpanda instance instead, override LIGHTPANDA_BIN
+  # and/or WEB_SEARCH_LIGHTPANDA_URL on the api service.
+  lightpanda:
+    image: lightpanda/browser:nightly
+    restart: unless-stopped
+    # CDP server on 9222 (the default). To switch to CLI mode, set
+    # LIGHTPANDA_BIN=lightpanda on api and remove the ports block.
+    command: ["serve", "--host", "0.0.0.0", "--port", "9222"]
+    ports:
+      - "9222:9222"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      lightpanda:
+        condition: service_started
+    environment:
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me-immediately}
+      DATABASE_URL: postgres://helm:helm_dev@postgres:5432/helm
+      REDIS_URL: redis://redis:6379
+      SESSION_SECRET: ${SESSION_SECRET:-dev-only-do-not-use-in-prod-7d2c5f8a}
+      API_PORT: "3000"
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:5173}
+      # Live-data web search. The api shell-spawns the `lightpanda`
+      # binary by default; override LIGHTPANDA_BIN to point at a custom
+      # path. To switch to a long-running Lightpanda daemon, set
+      # WEB_SEARCH_LIGHTPANDA_URL=http://lightpanda:9222.
+      LIGHTPANDA_BIN: lightpanda
+      # Optional: pay-per-call provider (Brave / Tavily). Lightpanda is
+      # the default; these only run if Lightpanda is disabled.
+      WEB_SEARCH_BRAVE_KEY: ${WEB_SEARCH_BRAVE_KEY:-}
+      WEB_SEARCH_TAVILY_KEY: ${WEB_SEARCH_TAVILY_KEY:-}
+    ports:
+      - "3000:3000"
+
+volumes:
+  helm_pg:
+  helm_redis:

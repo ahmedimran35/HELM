@@ -1,0 +1,66 @@
+# .dockerignore — keep the build context small AND prevent secrets
+# from being baked into the image even by accident.
+#
+# Any path here is excluded from the build context AND from COPY
+# inside Dockerfile, so a stray .env, .git, or screenshot folder
+# can't end up in the image.
+
+# Local secrets — never in image
+.env
+.env.*
+!.env.example
+.helm-secrets
+*.pem
+*.key
+id_rsa
+id_ed25519
+*.crt
+
+# VCS / IDE / OS junk
+.git
+.gitignore
+.github
+.gitattributes
+.idea
+.vscode
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Node / Bun
+node_modules
+bun.lockb
+.npm
+.yarn
+.pnp.*
+*.log
+*.tsbuildinfo
+.cache
+.parcel-cache
+
+# Test artifacts
+coverage
+.nyc_output
+junit.xml
+
+# Frontend build outputs
+frontend/dist
+frontend/node_modules
+apps-bundles
+
+# Documentation / screenshots
+*.md
+docs
+gui-test-screenshots
+.artifacts
+
+# Anything zcode-related
+.zcode
+.zsh_history
+
+# Editor configs
+.editorconfig
+.eslintrc*
+.prettierrc*
+.prettierignore

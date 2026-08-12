@@ -1,0 +1,1147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Notes — HELM</title>
+  <style>
+    :root {
+      --bg: #0B0E12;
+      --panel: #14171d;
+      --panel-alt: #1a1e25;
+      --panel-hi: #1f242c;
+      --border: #2a2f38;
+      --border-soft: #1f232a;
+      --text: #e6e6e6;
+      --text-muted: #9aa0a6;
+      --text-faint: #6a707a;
+      --brass: #C9A227;
+      --brass-soft: #d6b94d;
+      --brass-dim: rgba(201, 162, 39, 0.18);
+      --teal: #4c9c90;
+      --rust: #b5533c;
+      --teal-dim: rgba(76, 156, 144, 0.18);
+      --rust-dim: rgba(181, 83, 60, 0.18);
+    }
+    html[data-theme="light"] {
+      --bg: #F5F1E8;
+      --panel: #FBF7EE;
+      --panel-alt: #EFE9D9;
+      --panel-hi: #ECE5D2;
+      --border: #C7BFA8;
+      --border-soft: #DBD3BC;
+      --text: #1f232a;
+      --text-muted: #5b625d;
+      --text-faint: #7d847b;
+      --brass: #8a6d12;
+      --brass-soft: #6e560b;
+      --brass-dim: rgba(138, 109, 18, 0.18);
+      --teal: #2d6b62;
+      --rust: #8b3e2a;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", monospace;
+      font-size: 13px;
+      line-height: 1.55;
+      min-height: 100vh;
+    }
+    .mono-caps { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--text-muted); }
+    .tabular { font-variant-numeric: tabular-nums; }
+
+    /* layout — three columns */
+    .app {
+      display: grid;
+      grid-template-columns: 220px 320px 1fr;
+      grid-template-rows: 48px 1fr;
+      height: 100vh;
+      width: 100vw;
+    }
+    @media (max-width: 900px) {
+      .app { grid-template-columns: 1fr; grid-template-rows: 48px auto 1fr; }
+      .sidebar { display: none; }
+      .list { max-height: 240px; }
+    }
+
+    /* top bar */
+    .topbar {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--border-soft);
+      background: var(--panel);
+    }
+    .topbar .icon {
+      width: 24px; height: 24px;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--brass); color: var(--bg);
+    }
+    .topbar .title {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      color: var(--text);
+    }
+    .topbar .sub {
+      font-size: 10px;
+      color: var(--text-faint);
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+    .topbar .spacer { flex: 1; }
+    .topbar .who {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .topbar .who b { color: var(--text); font-weight: 600; }
+
+    /* sidebar */
+    .sidebar {
+      border-right: 1px solid var(--border-soft);
+      background: var(--panel);
+      overflow-y: auto;
+      padding: 14px 0;
+    }
+    .sidebar h4 {
+      margin: 0 14px 8px;
+      font-size: 10px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+      font-weight: 600;
+    }
+    .sidebar .item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 14px;
+      cursor: pointer;
+      font-size: 12px;
+      color: var(--text-muted);
+      border-left: 2px solid transparent;
+      user-select: none;
+    }
+    .sidebar .item:hover { background: var(--panel-alt); color: var(--text); }
+    .sidebar .item.active {
+      background: var(--panel-hi);
+      color: var(--text);
+      border-left-color: var(--brass);
+    }
+    .sidebar .item .count {
+      margin-left: auto;
+      font-size: 10px;
+      color: var(--text-faint);
+      font-variant-numeric: tabular-nums;
+    }
+    .sidebar .item.active .count { color: var(--brass); }
+    .sidebar .item .glyph {
+      width: 14px; text-align: center;
+      color: var(--text-faint);
+      font-size: 11px;
+    }
+    .sidebar .item.active .glyph { color: var(--brass); }
+    .sidebar .newfolder {
+      display: flex;
+      gap: 4px;
+      padding: 6px 14px;
+      margin-top: 6px;
+    }
+    .sidebar .newfolder input {
+      flex: 1;
+      background: var(--panel-alt);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 11px;
+      padding: 4px 6px;
+    }
+    .sidebar .newfolder input:focus { outline: 1px solid var(--brass); border-color: var(--brass); }
+    .sidebar .newfolder button {
+      padding: 3px 8px;
+      font-size: 10px;
+      letter-spacing: 0.14em;
+    }
+
+    /* list */
+    .list {
+      border-right: 1px solid var(--border-soft);
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .list .search {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border-soft);
+      background: var(--panel);
+    }
+    .list .search input {
+      width: 100%;
+      background: var(--panel-alt);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 12px;
+      padding: 7px 10px;
+    }
+    .list .search input:focus { outline: 1px solid var(--brass); border-color: var(--brass); }
+    .list .search .hint {
+      margin-top: 5px;
+      font-size: 9px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .list .search .hint kbd {
+      background: var(--panel-alt);
+      border: 1px solid var(--border);
+      padding: 1px 5px;
+      font-family: inherit;
+      font-size: 9px;
+      color: var(--text-muted);
+    }
+    .list .items {
+      flex: 1;
+      overflow-y: auto;
+    }
+    .list .items .empty {
+      padding: 32px 18px;
+      text-align: center;
+      color: var(--text-faint);
+      font-size: 12px;
+    }
+    .list .item {
+      padding: 11px 14px;
+      border-bottom: 1px solid var(--border-soft);
+      cursor: pointer;
+      display: block;
+    }
+    .list .item:hover { background: var(--panel-alt); }
+    .list .item.active { background: var(--panel-hi); border-left: 2px solid var(--brass); padding-left: 12px; }
+    .list .item .ti {
+      font-size: 13px;
+      color: var(--text);
+      font-weight: 600;
+      margin-bottom: 3px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .list .item .preview {
+      font-size: 11px;
+      color: var(--text-muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      line-height: 1.4;
+      max-height: 2.8em;
+    }
+    .list .item .meta {
+      margin-top: 4px;
+      display: flex;
+      gap: 6px;
+      font-size: 9px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+    }
+    .list .item .meta .tag {
+      color: var(--brass);
+    }
+    .list .item .meta .folder {
+      color: var(--text-muted);
+    }
+
+    /* editor */
+    .editor {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--bg);
+    }
+    .editor .empty {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      color: var(--text-faint);
+      font-size: 12px;
+      gap: 10px;
+    }
+    .editor .empty .glyph {
+      font-size: 28px;
+      color: var(--text-muted);
+    }
+    .editor .form {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      overflow: hidden;
+    }
+    .editor .form-head {
+      padding: 20px 28px 12px;
+      border-bottom: 1px solid var(--border-soft);
+    }
+    .editor .title-input {
+      width: 100%;
+      background: transparent;
+      border: none;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      padding: 0;
+      outline: none;
+    }
+    .editor .title-input::placeholder { color: var(--text-faint); }
+    .editor .meta-row {
+      margin-top: 10px;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: center;
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+    }
+    .editor .meta-row .field {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .editor .meta-row input, .editor .meta-row select {
+      background: var(--panel-alt);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 11px;
+      padding: 3px 6px;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+    .editor .meta-row input:focus, .editor .meta-row select:focus { outline: 1px solid var(--brass); border-color: var(--brass); }
+    .editor .meta-row .save-status {
+      margin-left: auto;
+      color: var(--text-faint);
+    }
+    .editor .meta-row .save-status.saved { color: var(--teal); }
+    .editor .meta-row .save-status.dirty { color: var(--brass); }
+    .editor .body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 18px 28px 28px;
+    }
+    .editor .body textarea {
+      width: 100%;
+      min-height: 100%;
+      background: transparent;
+      border: none;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 14px;
+      line-height: 1.7;
+      resize: none;
+      outline: none;
+      padding: 0;
+    }
+    .editor .body textarea::placeholder { color: var(--text-faint); }
+    .editor .footer {
+      padding: 12px 22px;
+      border-top: 1px solid var(--border-soft);
+      display: flex;
+      gap: 8px;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--panel);
+    }
+    .editor .footer .left {
+      display: flex; gap: 8px;
+    }
+    .editor .footer .count {
+      font-size: 10px;
+      color: var(--text-faint);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    /* shared buttons */
+    button {
+      background: var(--brass);
+      color: var(--bg);
+      border: 1px solid var(--brass);
+      padding: 7px 12px;
+      font-family: inherit;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background 120ms;
+    }
+    button:hover { background: var(--brass-soft); border-color: var(--brass-soft); }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    button.ghost {
+      background: transparent;
+      color: var(--text);
+      border-color: var(--border);
+    }
+    button.ghost:hover { border-color: var(--brass); color: var(--brass); }
+    button.danger:hover { background: var(--rust); border-color: var(--rust); color: #fff; }
+
+    /* chips */
+    .chip {
+      display: inline-block;
+      padding: 2px 7px;
+      font-size: 9px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      border: 1px solid;
+    }
+    .chip-err { color: var(--rust); border-color: var(--rust-dim); background: var(--rust-dim); }
+    .chip-ok { color: var(--teal); border-color: var(--teal-dim); background: var(--teal-dim); }
+
+    .no-install {
+      margin: 60px auto;
+      max-width: 480px;
+      padding: 16px;
+      border: 1px solid var(--rust-dim);
+      background: var(--rust-dim);
+      color: var(--rust);
+      font-size: 12px;
+    }
+    .no-install code {
+      background: var(--panel-alt);
+      padding: 1px 6px;
+      border: 1px solid var(--border-soft);
+    }
+
+    /* confirm overlay */
+    .overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .overlay .dialog {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      padding: 22px;
+      max-width: 420px;
+      min-width: 320px;
+    }
+    .overlay .dialog h4 {
+      margin: 0 0 8px;
+      font-size: 13px;
+      color: var(--text);
+      letter-spacing: 0.04em;
+    }
+    .overlay .dialog p {
+      margin: 0 0 16px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .overlay .dialog .row {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    /* scrollbar */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border); }
+    ::-webkit-scrollbar-thumb:hover { background: var(--brass); }
+  </style>
+</head>
+<body>
+  <div id="root">loading…</div>
+
+  <script>
+    /* ===================================================================
+     * Notes — per-user notepad with folders, tags, search, keyboard
+     * shortcuts, and a "today" view. State persisted via the SDK's
+     * per-install data store; the install is per-user so notes are
+     * private.
+     * =================================================================== */
+    const params = new URLSearchParams(location.search);
+    const installIdFromUrl = params.get("install");
+
+    const state = {
+      sdk: null,
+      install: installIdFromUrl,
+      me: null,
+      theme: "dark",
+      notes: {},           // id -> note
+      order: [],           // note ids sorted by updated_at desc
+      folders: [],         // ["inbox", "work", "personal", ...]
+      activeFolder: "all", // "all" | "today" | folder string
+      search: "",
+      activeId: null,
+      draft: null,         // current unsaved (dirty) edit state
+      saveTimer: null,
+      saveStatus: null,    // "saved" | "dirty" | null
+      newFolderMode: false,
+      newFolder: "",
+      confirm: null,       // { kind, noteId, ... }
+    };
+
+    function escapeHtml(s) {
+      return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+      }[c]));
+    }
+    function applyTheme(theme) {
+      state.theme = theme === "light" ? "light" : "dark";
+      document.documentElement.setAttribute("data-theme", state.theme);
+    }
+
+    const NOTES_KEY = "notes";
+    const FOLDERS_KEY = "folders";
+    const ACTIVE_KEY = "active_id";
+
+    async function waitForSDK(timeoutMs = 4000) {
+      const start = Date.now();
+      while (Date.now() - start < timeoutMs) {
+        if (window.helmApp && window.helmApp.ready) {
+          try { await window.helmApp.ready; return window.helmApp; }
+          catch (_) {}
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      return null;
+    }
+    async function bootstrapStandalone() {
+      if (!installIdFromUrl) return null;
+      try {
+        const r = await fetch(`/api/apps/bootstrap?install=${encodeURIComponent(installIdFromUrl)}`, { credentials: "include" });
+        if (!r.ok) return null;
+        return await r.json();
+      } catch (_) { return null; }
+    }
+
+    async function dataGet(key) {
+      if (state.sdk && state.sdk.data && state.sdk.data.get) {
+        const r = await state.sdk.data.get(key);
+        return r && r.value !== undefined ? r.value : r;
+      }
+      if (!state.install) return null;
+      const r = await fetch(`/api/app-data/${state.install}/${encodeURIComponent(key)}`, { credentials: "include" });
+      if (!r.ok) return null;
+      return (await r.json()).value;
+    }
+    async function dataSet(key, value) {
+      if (state.sdk && state.sdk.data && state.sdk.data.set) return state.sdk.data.set(key, value);
+      if (!state.install) return;
+      await fetch(`/api/app-data/${state.install}/${encodeURIComponent(key)}`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value }),
+      });
+    }
+    async function dataDel(key) {
+      if (state.sdk && state.sdk.data && state.sdk.data.del) return state.sdk.data.del(key);
+      if (!state.install) return;
+      await fetch(`/api/app-data/${state.install}/${encodeURIComponent(key)}`, {
+        method: "DELETE", credentials: "include",
+      });
+    }
+    function toast(opts) {
+      if (state.sdk && state.sdk.toast) return state.sdk.toast(opts);
+      console.log("[toast]", opts);
+    }
+
+    function uid() {
+      return "n_" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+    }
+
+    async function loadAll() {
+      const [rawNotes, folders, activeId] = await Promise.all([
+        dataGet(NOTES_KEY),
+        dataGet(FOLDERS_KEY),
+        dataGet(ACTIVE_KEY),
+      ]);
+      state.notes = (rawNotes && typeof rawNotes === "object") ? rawNotes : {};
+      state.folders = Array.isArray(folders) && folders.length > 0 ? folders : ["inbox", "work", "personal"];
+      state.order = Object.values(state.notes)
+        .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+        .map((n) => n.id);
+      if (activeId && state.notes[activeId]) state.activeId = activeId;
+      else if (state.order.length > 0) state.activeId = state.order[0];
+    }
+
+    async function persistNotes() {
+      // Strip empty defaults to keep the blob small.
+      const clean = {};
+      for (const [id, n] of Object.entries(state.notes)) {
+        if (n && (n.title || n.body || n.tags || n.folder)) clean[id] = n;
+      }
+      await dataSet(NOTES_KEY, clean);
+    }
+    async function persistFolders() {
+      const clean = Array.from(new Set(state.folders.filter(Boolean))).filter((f) => f !== "all" && f !== "today");
+      await dataSet(FOLDERS_KEY, clean);
+    }
+    async function persistActive() {
+      if (state.activeId) await dataSet(ACTIVE_KEY, state.activeId);
+      else await dataDel(ACTIVE_KEY);
+    }
+
+    /* ===================================================================
+     * Mutations
+     * =================================================================== */
+    function newNote() {
+      const folder = state.activeFolder === "all" || state.activeFolder === "today"
+        ? (state.folders[0] || "inbox")
+        : state.activeFolder;
+      const id = uid();
+      const now = new Date().toISOString();
+      const note = {
+        id,
+        title: "",
+        body: "",
+        tags: [],
+        folder,
+        created_at: now,
+        updated_at: now,
+      };
+      state.notes[id] = note;
+      state.order.unshift(id);
+      state.activeId = id;
+      state.draft = { title: "", body: "", tags: [], folder };
+      state.saveStatus = "saved";
+      persistNotes();
+      persistActive();
+      paint({ focusId: "title-input" });
+    }
+
+    function deleteActive() {
+      if (!state.activeId) return;
+      const id = state.activeId;
+      const note = state.notes[id];
+      if (!note) return;
+      state.confirm = { kind: "delete", noteId: id, title: note.title || "untitled" };
+      paint();
+    }
+
+    async function confirmDelete() {
+      const id = state.confirm && state.confirm.noteId;
+      if (!id) return;
+      delete state.notes[id];
+      state.order = state.order.filter((x) => x !== id);
+      if (state.activeId === id) {
+        state.activeId = state.order[0] || null;
+        state.draft = state.activeId ? draftFromNote(state.notes[state.activeId]) : null;
+      }
+      state.confirm = null;
+      await persistNotes();
+      await persistActive();
+      paint();
+    }
+
+    function draftFromNote(note) {
+      return {
+        title: note.title || "",
+        body: note.body || "",
+        tags: Array.isArray(note.tags) ? note.tags.slice() : [],
+        folder: note.folder || (state.folders[0] || "inbox"),
+      };
+    }
+
+    function updateDraft(field, value) {
+      if (!state.activeId || !state.notes[state.activeId]) return;
+      if (!state.draft) state.draft = draftFromNote(state.notes[state.activeId]);
+      state.draft[field] = value;
+      state.saveStatus = "dirty";
+      // optimistic: reflect in note immediately so the list preview stays live
+      const note = state.notes[state.activeId];
+      note[field] = value;
+      note.updated_at = new Date().toISOString();
+      // re-sort order
+      state.order = Object.values(state.notes)
+        .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+        .map((n) => n.id);
+      scheduleSave();
+      paint({ keepSelection: true });
+    }
+
+    function scheduleSave() {
+      if (state.saveTimer) clearTimeout(state.saveTimer);
+      state.saveTimer = setTimeout(commitSave, 600);
+    }
+    async function commitSave() {
+      if (!state.activeId || !state.notes[state.activeId] || !state.draft) return;
+      const note = state.notes[state.activeId];
+      note.title = state.draft.title;
+      note.body = state.draft.body;
+      note.tags = state.draft.tags;
+      note.folder = state.draft.folder;
+      note.updated_at = new Date().toISOString();
+      await persistNotes();
+      state.saveStatus = "saved";
+      paint({ keepSelection: true });
+    }
+
+    /* Filtering */
+    function isToday(iso) {
+      const d = new Date(iso);
+      const now = new Date();
+      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+    }
+    function noteMatches(note) {
+      if (state.activeFolder === "today") {
+        if (!isToday(note.updated_at)) return false;
+      } else if (state.activeFolder !== "all") {
+        if (note.folder !== state.activeFolder) return false;
+      }
+      if (state.search) {
+        const q = state.search.toLowerCase();
+        const hay = (note.title + "\n" + note.body + "\n" + (note.tags || []).join(" ")).toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    }
+
+    function addFolder() {
+      const f = state.newFolder.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+      if (!f) { state.newFolderMode = false; state.newFolder = ""; paint(); return; }
+      if (!state.folders.includes(f)) state.folders.push(f);
+      state.activeFolder = f;
+      state.newFolder = "";
+      state.newFolderMode = false;
+      persistFolders();
+      paint();
+    }
+
+    /* Keyboard shortcuts */
+    function onKey(e) {
+      // Skip when typing in inputs (except for a few true globals).
+      const tag = (e.target.tagName || "").toLowerCase();
+      const inField = tag === "input" || tag === "textarea" || tag === "select";
+      const isMod = e.metaKey || e.ctrlKey;
+
+      // Cmd/Ctrl+S — always save immediately
+      if (isMod && e.key === "s") {
+        e.preventDefault();
+        if (state.saveTimer) clearTimeout(state.saveTimer);
+        commitSave();
+        return;
+      }
+      // Esc — deselect / cancel
+      if (e.key === "Escape") {
+        if (state.confirm) { state.confirm = null; paint(); return; }
+        if (state.newFolderMode) { state.newFolderMode = false; state.newFolder = ""; paint(); return; }
+        if (state.search) { state.search = ""; paint(); return; }
+        if (state.activeId) {
+          state.activeId = null;
+          state.draft = null;
+          persistActive();
+          paint();
+        }
+        return;
+      }
+      if (inField) {
+        // In title input, "/" focuses search
+        if (e.key === "/" && e.target.id === "title-input") {
+          e.preventDefault();
+          const s = document.getElementById("search-input");
+          if (s) s.focus();
+        }
+        return;
+      }
+      // global shortcuts
+      if (e.key === "/") {
+        e.preventDefault();
+        const s = document.getElementById("search-input");
+        if (s) s.focus();
+        return;
+      }
+      if (e.key === "n") {
+        e.preventDefault();
+        newNote();
+        return;
+      }
+      if (e.key === "j") {
+        e.preventDefault();
+        moveSelection(1);
+        return;
+      }
+      if (e.key === "k") {
+        e.preventDefault();
+        moveSelection(-1);
+        return;
+      }
+      if (e.key === "e") {
+        e.preventDefault();
+        if (state.activeId) {
+          const ta = document.getElementById("body-input");
+          if (ta) ta.focus();
+        }
+        return;
+      }
+      if (e.key === "t") {
+        e.preventDefault();
+        state.activeFolder = "today";
+        paint();
+      }
+    }
+    function moveSelection(dir) {
+      const visible = state.order.filter((id) => noteMatches(state.notes[id]));
+      if (visible.length === 0) return;
+      const idx = visible.indexOf(state.activeId);
+      let next = idx + dir;
+      if (next < 0) next = 0;
+      if (next >= visible.length) next = visible.length - 1;
+      state.activeId = visible[next];
+      state.draft = draftFromNote(state.notes[state.activeId]);
+      persistActive();
+      paint();
+    }
+
+    /* ===================================================================
+     * Render
+     * =================================================================== */
+    function formatTimestamp(iso) {
+      try {
+        const d = new Date(iso);
+        const now = new Date();
+        const sameDay = d.toDateString() === now.toDateString();
+        if (sameDay) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        const diff = (now - d) / (1000 * 60 * 60 * 24);
+        if (diff < 7) return d.toLocaleDateString(undefined, { weekday: "short" });
+        return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      } catch (_) { return ""; }
+    }
+    function wordCount(s) {
+      if (!s) return 0;
+      return s.trim().split(/\s+/).filter(Boolean).length;
+    }
+
+    function paint(opts) {
+      // Capture the currently-focused input + its caret position BEFORE we
+      // wipe root.innerHTML — otherwise every keystroke in the editor
+      // rebuilds the DOM and the user can only type one character before
+      // losing focus. We restore the focus + selection after the rebuild.
+      const active = document.activeElement;
+      let focusId = null, selStart = null, selEnd = null, selDir = null;
+      if (active && active.id && active.tagName !== "BODY") {
+        try {
+          focusId = active.id;
+          if (typeof active.selectionStart === "number") {
+            selStart = active.selectionStart;
+            selEnd = active.selectionEnd;
+            selDir = active.selectionDirection || "forward";
+          }
+        } catch (_e) { /* ignore */ }
+      }
+      // Honour explicit hints from callers.
+      if (opts && opts.focusId) focusId = opts.focusId;
+      if (opts && typeof opts.selStart === "number") {
+        selStart = opts.selStart;
+        selEnd = (typeof opts.selEnd === "number") ? opts.selEnd : opts.selStart;
+        selDir = opts.selDir || "forward";
+      }
+
+      const root = document.getElementById("root");
+
+      if (!state.install) {
+        root.innerHTML = `
+          <div class="no-install">
+            <strong>no install context.</strong>
+            open this app from the HELM admin <em>Apps</em> tab or via a panel that has it installed.
+            the SDK or <code>?install=&lt;uuid&gt;</code> supplies the install id.
+          </div>`;
+        return;
+      }
+
+      const counts = { all: 0, today: 0 };
+      state.folders.forEach((f) => counts[f] = 0);
+      for (const id of state.order) {
+        const n = state.notes[id];
+        if (!n) continue;
+        counts.all++;
+        if (isToday(n.updated_at)) counts.today++;
+        if (n.folder && counts[n.folder] !== undefined) counts[n.folder]++;
+      }
+
+      const foldersUI = state.folders.map((f) => `
+        <div class="item ${state.activeFolder === f ? "active" : ""}" data-folder="${escapeHtml(f)}">
+          <span class="glyph">▤</span>
+          <span>${escapeHtml(f)}</span>
+          <span class="count">${counts[f] || 0}</span>
+        </div>
+      `).join("");
+
+      const topbar = `
+        <div class="topbar">
+          <div class="icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square">
+              <path d="M5 4h11l3 3v13H5z"/>
+              <line x1="8" y1="9" x2="16" y2="9"/>
+              <line x1="8" y1="13" x2="16" y2="13"/>
+              <line x1="8" y1="17" x2="13" y2="17"/>
+            </svg>
+          </div>
+          <div>
+            <div class="title">Notes</div>
+          </div>
+          <div class="sub">HELM · personal</div>
+          <div class="spacer"></div>
+          <div class="who"><b>${escapeHtml((state.me && (state.me.name || state.me.username)) || "you")}</b> · ${state.order.length} note${state.order.length === 1 ? "" : "s"}</div>
+        </div>
+      `;
+
+      const sidebar = `
+        <aside class="sidebar">
+          <h4>Views</h4>
+          <div class="item ${state.activeFolder === "all" ? "active" : ""}" data-folder="all">
+            <span class="glyph">◇</span><span>all notes</span><span class="count">${counts.all}</span>
+          </div>
+          <div class="item ${state.activeFolder === "today" ? "active" : ""}" data-folder="today">
+            <span class="glyph">◈</span><span>today</span><span class="count">${counts.today}</span>
+          </div>
+          <h4 style="margin-top:16px;">Folders</h4>
+          ${foldersUI}
+          ${state.newFolderMode
+            ? `<div class="newfolder">
+                 <input id="new-folder-input" placeholder="folder-name" value="${escapeHtml(state.newFolder)}" />
+                 <button id="new-folder-add">add</button>
+               </div>`
+            : `<div class="item" id="new-folder-btn" style="color:var(--text-faint);font-style:italic;">
+                 <span class="glyph">+</span><span>new folder</span>
+               </div>`
+          }
+        </aside>
+      `;
+
+      const visible = state.order.filter((id) => noteMatches(state.notes[id]));
+      const items = visible.length === 0
+        ? `<div class="empty">no notes ${state.search ? "match your search" : (state.activeFolder === "today" ? "today" : "in this folder")}.<br><br>press <kbd style="font-family:inherit;background:var(--panel-alt);padding:1px 5px;border:1px solid var(--border);">n</kbd> to create one.</div>`
+        : visible.map((id) => {
+          const n = state.notes[id];
+          return `
+            <div class="item ${state.activeId === id ? "active" : ""}" data-id="${escapeHtml(id)}">
+              <div class="ti">${escapeHtml(n.title || "untitled")}</div>
+              <div class="preview">${escapeHtml((n.body || "").replace(/\s+/g, " ").slice(0, 200) || "—")}</div>
+              <div class="meta">
+                <span class="folder">${escapeHtml(n.folder || "inbox")}</span>
+                <span class="tag">${(n.tags || []).slice(0, 3).map((t) => "#" + t).join(" ")}</span>
+                <span class="spacer" style="flex:1;"></span>
+                <span>${formatTimestamp(n.updated_at)}</span>
+              </div>
+            </div>
+          `;
+        }).join("");
+
+      const list = `
+        <section class="list">
+          <div class="search">
+            <input id="search-input" placeholder="search notes..." value="${escapeHtml(state.search)}" />
+            <div class="hint">
+              <span><kbd>/</kbd> search</span>
+              <span><kbd>n</kbd> new</span>
+              <span><kbd>j</kbd>/<kbd>k</kbd> move</span>
+              <span><kbd>e</kbd> edit</span>
+              <span><kbd>⌘S</kbd> save</span>
+              <span><kbd>esc</kbd> deselect</span>
+            </div>
+          </div>
+          <div class="items">${items}</div>
+        </section>
+      `;
+
+      let editor;
+      if (!state.activeId || !state.notes[state.activeId]) {
+        editor = `
+          <section class="editor">
+            <div class="empty">
+              <div class="glyph">✎</div>
+              <div>pick a note or press <kbd style="font-family:inherit;background:var(--panel-alt);padding:1px 5px;border:1px solid var(--border);">n</kbd> to start writing</div>
+              <div style="font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:var(--text-faint);">${visible.length} visible · ${state.order.length} total</div>
+            </div>
+          </section>
+        `;
+      } else {
+        const n = state.notes[state.activeId];
+        const d = state.draft || draftFromNote(n);
+        const tagsStr = (d.tags || []).join(", ");
+        const status = state.saveStatus === "saved" ? "saved" : state.saveStatus === "dirty" ? "saving…" : "";
+        editor = `
+          <section class="editor">
+            <div class="form">
+              <div class="form-head">
+                <input id="title-input" class="title-input" placeholder="Untitled note" value="${escapeHtml(d.title)}" />
+                <div class="meta-row">
+                  <span class="field">
+                    <span>folder</span>
+                    <select id="folder-input">
+                      ${state.folders.map((f) => `<option value="${escapeHtml(f)}" ${d.folder === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
+                    </select>
+                  </span>
+                  <span class="field">
+                    <span>tags</span>
+                    <input id="tags-input" placeholder="comma, separated" value="${escapeHtml(tagsStr)}" />
+                  </span>
+                  <span class="field">
+                    <span>created</span>
+                    <span style="color:var(--text-muted);text-transform:none;letter-spacing:0;">${formatTimestamp(n.created_at)}</span>
+                  </span>
+                  <span class="field">
+                    <span>updated</span>
+                    <span style="color:var(--text-muted);text-transform:none;letter-spacing:0;">${formatTimestamp(n.updated_at)}</span>
+                  </span>
+                  <span class="save-status ${state.saveStatus || ""}">${escapeHtml(status)}</span>
+                </div>
+              </div>
+              <div class="body">
+                <textarea id="body-input" placeholder="start writing…">${escapeHtml(d.body)}</textarea>
+              </div>
+              <div class="footer">
+                <div class="left">
+                  <button id="delete-btn" class="ghost danger">delete</button>
+                </div>
+                <div class="count tabular">${wordCount(d.body)} words · ${(d.body || "").length} chars</div>
+              </div>
+            </div>
+          </section>
+        `;
+      }
+
+      // Confirm overlay
+      const overlay = state.confirm && state.confirm.kind === "delete"
+        ? `<div class="overlay">
+             <div class="dialog">
+               <h4>delete note?</h4>
+               <p>"${escapeHtml(state.confirm.title)}" — this can't be undone.</p>
+               <div class="row">
+                 <button id="confirm-cancel" class="ghost">cancel</button>
+                 <button id="confirm-delete" class="danger">delete</button>
+               </div>
+             </div>
+           </div>`
+        : "";
+
+      root.innerHTML = `
+        <div class="app">
+          ${topbar}
+          ${sidebar}
+          ${list}
+          ${editor}
+        </div>
+        ${overlay}
+      `;
+
+      // Wire up
+      for (const el of root.querySelectorAll(".sidebar .item[data-folder]")) {
+        el.onclick = () => { state.activeFolder = el.dataset.folder; paint(); };
+      }
+      const nfb = document.getElementById("new-folder-btn");
+      if (nfb) nfb.onclick = () => { state.newFolderMode = true; paint({ focusId: "new-folder-input" }); };
+      const nfi = document.getElementById("new-folder-input");
+      if (nfi) {
+        nfi.oninput = (e) => { state.newFolder = e.target.value; };
+        nfi.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); addFolder(); } };
+      }
+      const nfa = document.getElementById("new-folder-add");
+      if (nfa) nfa.onclick = addFolder;
+
+      for (const el of root.querySelectorAll(".list .item[data-id]")) {
+        el.onclick = () => {
+          state.activeId = el.dataset.id;
+          state.draft = draftFromNote(state.notes[state.activeId]);
+          persistActive();
+          paint({ focusId: "title-input" });
+        };
+      }
+      const sBox = document.getElementById("search-input");
+      if (sBox) {
+        sBox.oninput = (e) => { state.search = e.target.value; paint(); };
+      }
+      const ti = document.getElementById("title-input");
+      if (ti) ti.oninput = (e) => updateDraft("title", e.target.value);
+      const bi = document.getElementById("body-input");
+      if (bi) bi.oninput = (e) => updateDraft("body", e.target.value);
+      const fi = document.getElementById("folder-input");
+      if (fi) fi.onchange = (e) => updateDraft("folder", e.target.value);
+      const tags = document.getElementById("tags-input");
+      if (tags) tags.oninput = (e) => updateDraft("tags", e.target.value.split(",").map((s) => s.trim()).filter(Boolean));
+
+      const del = document.getElementById("delete-btn");
+      if (del) del.onclick = deleteActive;
+      const cc = document.getElementById("confirm-cancel");
+      if (cc) cc.onclick = () => { state.confirm = null; paint(); };
+      const cd = document.getElementById("confirm-delete");
+      if (cd) cd.onclick = confirmDelete;
+
+      // Restore focus + caret position after the DOM rebuild. Without
+      // this, typing in the title/body inputs loses focus after every
+      // character because paint() runs on each keystroke.
+      if (focusId) {
+        const target = document.getElementById(focusId);
+        if (target) {
+          try {
+            target.focus({ preventScroll: true });
+            if (selStart !== null && typeof target.setSelectionRange === "function") {
+              target.setSelectionRange(selStart, selEnd, selDir);
+            }
+          } catch (_e) { /* ignore */ }
+        }
+      }
+    }
+
+    /* ===================================================================
+     * Boot
+     * =================================================================== */
+    async function boot() {
+      const sdk = await waitForSDK();
+      state.sdk = sdk;
+      if (sdk) {
+        if (sdk.me) state.me = sdk.me;
+        if (sdk.theme) applyTheme(sdk.theme);
+        if (!state.install && sdk.install) state.install = sdk.install;
+        if (sdk.onThemeChange) sdk.onThemeChange(applyTheme);
+      } else {
+        const b = await bootstrapStandalone();
+        if (b) {
+          if (b.me) state.me = b.me;
+          if (b.install_id) state.install = b.install_id;
+          if (b.theme) applyTheme(b.theme);
+        }
+        const mql = window.matchMedia("(prefers-color-scheme: light)");
+        mql.addEventListener("change", (e) => applyTheme(e.matches ? "light" : "dark"));
+        applyTheme(mql.matches ? "light" : "dark");
+      }
+
+      if (!state.install) { paint(); return; }
+
+      try {
+        await loadAll();
+      } catch (e) {
+        console.warn("load failed:", e);
+      }
+      paint();
+    }
+
+    document.addEventListener("keydown", onKey);
+    boot().catch((e) => {
+      console.error(e);
+      paint();
+    });
+  </script>
+</body>
+</html>

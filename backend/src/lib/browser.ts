@@ -1,0 +1,247 @@
+// Headless-browser wrapper (Tier 3).
+//
+// Playwright is *optional*. We import it lazily so the route still
+// loads even when Playwright isn't installed — the route handler
+// surfaces a clear "browser_unavailable" error to the client.
+//
+// Actions supported by runBrowser:
+//   { type: "goto",   url?: string }       — navigate (overrides outer url)
+//   { type: "click",  selector: string }
+//   { type: "fill",   selector: string, value: string }
+//   { type: "wait",   ms?: number, selector?: string }
+//   { type: "extract",selector: string, attr?: string }
+//   { type: "screenshot" }                  — take a final screenshot
+//
+// All "extract" actions are collected; their results return to the
+// caller as an `extracted: Record<selector, string[]>` map. The final
+// page screenshot is saved to /tmp/browser/<panel_or_user>/<ts>.png
+// and the file path is returned to the caller so the API route can
+// serve it via the files route.
+//
+// This file deliberately has no auth — callers (the browser route)
+// are responsible for verifying the user.
+
+import { mkdir, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
+// Cached playwright module + browser. We only ever spin up one
+// chromium instance (the user's "agent browser") and reuse it across
+// requests. A mutex serialises actions so two requests can't fight
+// over the page state.
+let cachedModule: typeof import("playwright") | null = null;
+let cachedBrowser: import("playwright").Browser | null = null;
+let initPromise: Promise<void> | null = null;
+const mutex: { current: Promise<unknown> | null } = { current: null };
+
+async function withMutex<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = mutex.current ?? Promise.resolve();
+  let resolve: () => void = () => {};
+  const next = new Promise<void>((r) => (resolve = r));
+  mutex.current = prev.then(() => next);
+  try {
+    await prev;
+    return await fn();
+  } finally {
+    resolve();
+  }
+}
+
+export async function isBrowserAvailable(): Promise<boolean> {
+  try {
+    await ensureBrowser();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureBrowser(): Promise<void> {
+  if (cachedBrowser && cachedModule) return;
+  if (initPromise) return initPromise;
+  initPromise = (async () => {
+    if (cachedBrowser) return;
+    try {
+      cachedModule = await import("playwright");
+    } catch {
+      throw new Error("playwright_not_installed");
+    }
+    cachedBrowser = await cachedModule.chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-dev-shm-usage"],
+    });
+  })();
+  try {
+    await initPromise;
+  } catch (err) {
+    initPromise = null;
+    throw err;
+  }
+}
+
+export type BrowserAction =
+  | { type: "goto"; url: string }
+  | { type: "click"; selector: string }
+  | { type: "fill"; selector: string; value: string }
+  | { type: "wait"; ms?: number; selector?: string }
+  | { type: "extract"; selector: string; attr?: string }
+  | { type: "screenshot" };
+
+export interface BrowserExecInput {
+  url: string;
+  actions: BrowserAction[];
+  /** Used to scope the screenshot subdir. */
+  scope: string;
+}
+
+export interface BrowserExecOutput {
+  /** Resolved URL after navigation. */
+  finalUrl: string;
+  /** Final <title> of the page. */
+  title: string;
+  /** Extracted content keyed by the originating selector. */
+  extracted: Record<string, string[]>;
+  /** Relative path under the screenshots dir; the route serves this. */
+  screenshot: string | null;
+  /** Wall-clock duration in ms. */
+  duration_ms: number;
+  /** Set when Playwright isn't installed; the caller surfaces this. */
+  stub?: boolean;
+  reason?: string;
+}
+
+const SCREENSHOTS_DIR = join(process.cwd(), "tmp", "browser");
+
+export async function runBrowser(input: BrowserExecInput): Promise<BrowserExecOutput> {
+  const start = Date.now();
+  // Short-circuit when Playwright isn't installed. The caller can
+  // still surface the request with `stub: true` so the UI doesn't
+  // hang. We do this *outside* the mutex so a single 503 is fast.
+  try {
+    await ensureBrowser();
+  } catch (err) {
+    return {
+      finalUrl: input.url,
+      title: "",
+      extracted: {},
+      screenshot: null,
+      duration_ms: Date.now() - start,
+      stub: true,
+      reason: (err as Error).message,
+    };
+  }
+  return withMutex(async () => {
+    const pw = cachedModule!;
+    const context = await cachedBrowser!.newContext({
+      userAgent:
+        "Mozilla/5.0 (HELM-Agent/1.0) AppleWebKit/537.36 (KHTML, like Gecko) " +
+        "Chrome/126.0.0.0 Safari/537.36",
+    });
+    const page = await context.newPage();
+    const extracted: Record<string, string[]> = {};
+    let finalUrl = input.url;
+    let title = "";
+    try {
+      await page.goto(input.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      for (const action of input.actions ?? []) {
+        await runAction(page, action, extracted);
+      }
+      finalUrl = page.url();
+      title = await page.title();
+      // Always end with a screenshot so the UI has something to show.
+      await mkdir(join(SCREENSHOTS_DIR, input.scope), { recursive: true });
+      const ts = Date.now();
+      const screenshotPath = join(SCREENSHOTS_DIR, input.scope, `${ts}.png`);
+      await page.screenshot({ path: screenshotPath, fullPage: false });
+      return {
+        finalUrl,
+        title,
+        extracted,
+        screenshot: `${input.scope}/${ts}.png`,
+        duration_ms: Date.now() - start,
+      };
+    } catch (err) {
+      return {
+        finalUrl,
+        title,
+        extracted,
+        screenshot: null,
+        duration_ms: Date.now() - start,
+        stub: true,
+        reason: (err as Error).message,
+      };
+    } finally {
+      await context.close().catch(() => {});
+    }
+  });
+}
+
+async function runAction(
+  page: import("playwright").Page,
+  action: BrowserAction,
+  extracted: Record<string, string[]>,
+): Promise<void> {
+  switch (action.type) {
+    case "goto":
+      await page.goto(action.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      return;
+    case "click":
+      await page.click(action.selector, { timeout: 10_000 });
+      return;
+    case "fill":
+      await page.fill(action.selector, action.value, { timeout: 10_000 });
+      return;
+    case "wait":
+      if (action.selector) {
+        await page.waitForSelector(action.selector, { timeout: 10_000 });
+      } else {
+        await page.waitForTimeout(Math.max(0, Math.min(action.ms ?? 250, 10_000)));
+      }
+      return;
+    case "extract": {
+      const handle = await page.$$(action.selector);
+      const values: string[] = [];
+      for (const el of handle) {
+        const v = action.attr
+          ? await el.getAttribute(action.attr)
+          : ((await el.textContent()) ?? "");
+        if (v !== null) values.push(v);
+      }
+      extracted[action.selector] = values;
+      return;
+    }
+    case "screenshot":
+      // No-op — the wrapper always takes one at the end. Exposed for
+      // future mid-flow snapshots if we want them.
+      return;
+  }
+}
+
+/** Serve a previously saved screenshot. Returns null when the file
+ *  doesn't exist (caller returns 404). */
+export async function readScreenshot(
+  scope: string,
+  filename: string,
+): Promise<Uint8Array | null> {
+  if (!/^[a-zA-Z0-9_-]+$/.test(scope)) return null;
+  if (!/^[a-zA-Z0-9_.-]+$/.test(filename)) return null;
+  const path = join(SCREENSHOTS_DIR, scope, filename);
+  if (!existsSync(path)) return null;
+  // Lazy require to avoid loading node:fs into a non-Node-only env.
+  const { readFile } = await import("node:fs/promises");
+  return new Uint8Array(await readFile(path));
+}
+
+/** Save a raw screenshot. Used by tests / future flows that don't go
+ *  through the action graph. */
+export async function saveScreenshot(
+  scope: string,
+  filename: string,
+  bytes: Uint8Array,
+): Promise<string> {
+  const dir = join(SCREENSHOTS_DIR, scope);
+  await mkdir(dir, { recursive: true });
+  const path = join(dir, filename);
+  await writeFile(path, bytes);
+  return `${scope}/${filename}`;
+}

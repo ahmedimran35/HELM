@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HELM · App</title>
+  <style>
+    /* Theme tokens — mirror the HELM chrome so the embed feels like a
+       native panel rather than a third-party iframe. The parent page
+       tells us what theme to use; we fall back to "dark" if we don't
+       hear back in time. */
+    :root {
+      --bg: #0e1014;
+      --panel: #14171d;
+      --panel-alt: #1a1e25;
+      --border: #2a2f38;
+      --border-soft: #1f232a;
+      --text: #e6e6e6;
+      --text-muted: #9aa0a6;
+      --text-faint: #6a707a;
+      --brass: #c9a227;
+      --brass-soft: #d6b94d;
+      --teal: #4c9c90;
+      --rust: #b5533c;
+    }
+    [data-theme="light"] {
+      --bg: #f5f1e8;
+      --panel: #ffffff;
+      --panel-alt: #faf6ec;
+      --border: #d8d2c0;
+      --border-soft: #e6e0cc;
+      --text: #1f1d18;
+      --text-muted: #5e5a4f;
+      --text-faint: #888477;
+      --brass: #9c7a1b;
+      --brass-soft: #b58a23;
+      --teal: #2e7a6f;
+      --rust: #a13d2a;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", monospace;
+      font-size: 13px;
+      line-height: 1.5;
+      height: 100vh;
+      overflow: hidden;
+    }
+    .chrome {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      height: 38px;
+      padding: 0 14px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-family: inherit;
+      font-size: 11px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--brass);
+    }
+    .brand-mark {
+      width: 16px;
+      height: 16px;
+      border: 1.5px solid var(--brass);
+      transform: rotate(45deg);
+      display: inline-block;
+    }
+    .crumb {
+      font-size: 11px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+    }
+    .name {
+      font-size: 13px;
+      color: var(--text);
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+    .spacer { flex: 1; }
+    .back {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 11px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      padding: 4px 10px;
+      border: 1px solid var(--border);
+      background: transparent;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    .back:hover {
+      color: var(--brass);
+      border-color: var(--brass);
+    }
+    .stage {
+      position: relative;
+      flex: 1;
+      min-height: 0;
+      background: var(--bg);
+    }
+    .stage iframe {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: transparent;
+    }
+    .stage .veil {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-faint);
+      font-size: 11px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      background: var(--bg);
+      pointer-events: none;
+      transition: opacity 200ms ease;
+    }
+    .stage .veil.hidden { opacity: 0; }
+    .stage .veil.error {
+      color: var(--rust);
+    }
+    body, .stage {
+      display: flex;
+      flex-direction: column;
+    }
+    .toast-viewport {
+      position: fixed;
+      bottom: 16px;
+      right: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 50;
+      pointer-events: none;
+      max-width: 360px;
+    }
+    .toast {
+      pointer-events: auto;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+      animation: slide-in 180ms ease-out;
+    }
+    .toast.info { border-color: rgba(201, 162, 39, 0.4); }
+    .toast.success { border-color: rgba(76, 156, 144, 0.4); }
+    .toast.warning { border-color: rgba(181, 83, 60, 0.5); }
+    .toast .title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .toast .desc {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    @keyframes slide-in {
+      from { transform: translateX(20px); opacity: 0; }
+      to   { transform: translateX(0);    opacity: 1; }
+    }
+    .err-frame {
+      margin: 14px;
+      padding: 12px;
+      border: 1px solid rgba(181, 83, 60, 0.4);
+      background: rgba(181, 83, 60, 0.08);
+      color: var(--rust);
+      font-size: 12px;
+    }
+    .err-frame code {
+      background: var(--panel-alt);
+      padding: 1px 6px;
+      border: 1px solid var(--border-soft);
+      color: var(--text);
+    }
+  </style>
+</head>
+<body>
+  <header class="chrome" id="chrome">
+    <span class="brand"><span class="brand-mark"></span>HELM</span>
+    <span class="crumb">/ apps /</span>
+    <span class="name" id="app-name">app</span>
+    <span class="spacer"></span>
+    <button class="back" id="back-btn" type="button">back to helm</button>
+  </header>
+
+  <main class="stage">
+    <iframe id="app-frame" title="app"></iframe>
+    <div class="veil" id="veil">loading…</div>
+    <div class="err-frame" id="err-frame" style="display:none;"></div>
+  </main>
+
+  <div class="toast-viewport" id="toast-viewport" aria-live="polite"></div>
+
+  <script>
+    (function () {
+      "use strict";
+
+      var params = new URLSearchParams(window.location.search);
+      var slug = params.get("slug");
+      var install = params.get("install");
+      // The bundle URL is usually `/apps/<slug>/` but the catalog
+      // stores the actual location separately (e.g. an app whose slug
+      // is `standup` but whose bundle is served at `/apps/standup-app/`).
+      // Accept an explicit `?bundle=` from the host so the embed page
+      // can stay dumb; fall back to the legacy convention for callers
+      // that only know the slug.
+      var bundle = params.get("bundle");
+      var frame = document.getElementById("app-frame");
+      var veil = document.getElementById("veil");
+      var errBox = document.getElementById("err-frame");
+      var nameEl = document.getElementById("app-name");
+      var backBtn = document.getElementById("back-btn");
+      var toastViewport = document.getElementById("toast-viewport");
+      var chromeEl = document.getElementById("chrome");
+
+      // When the AppFrame React component embeds this page it passes
+      // ?embedded=1 — we hide our own chrome so the React-managed
+      // header above the iframe is the only chrome the user sees.
+      // Standalone visitors (who opened this URL in a new tab) still
+      // get the back-to-HELM button.
+      if (params.get("embedded") === "1" && chromeEl) {
+        chromeEl.style.display = "none";
+        document.body.classList.add("embedded");
+      }
+
+      function escapeHtml(s) {
+        return String(s ?? "").replace(/[&<>"']/g, function (c) {
+          return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c];
+        });
+      }
+
+      function showError(msg) {
+        veil.classList.add("error");
+        veil.textContent = msg;
+      }
+
+      function hideVeil() {
+        veil.classList.add("hidden");
+        // Remove after the fade so it doesn't sit invisibly over the app.
+        setTimeout(function () {
+          veil.style.display = "none";
+        }, 240);
+      }
+
+      // ----- build the iframe src -------------------------------------------
+
+      if (!slug) {
+        showError("missing ?slug=<app-slug>");
+        errBox.style.display = "block";
+        errBox.innerHTML =
+          "no <code>?slug=</code> parameter was provided. open this page from the " +
+          "<em>My Apps</em> section.";
+        return;
+      }
+
+      // Pretty-print the app name from the slug (hello-app → Hello App).
+      nameEl.textContent = slug
+        .split("-")
+        .map(function (w) { return w.charAt(0).toUpperCase() + w.slice(1); })
+        .join(" ");
+
+      var appUrl = bundle || ("/apps/" + encodeURIComponent(slug) + "/");
+      if (install) {
+        appUrl += (appUrl.indexOf("?") > -1 ? "&" : "?") + "install=" + encodeURIComponent(install);
+      }
+      frame.src = appUrl;
+
+      // ----- theme propagation ----------------------------------------------
+
+      // The embed page is hosted by the HELM shell which sets
+      // <html data-theme="…">. We read that on load, then watch for
+      // changes via postMessage (the shell tells us when the user
+      // toggles theme).
+      function readHostTheme() {
+        try {
+          // window.top is the HELM shell (we're not in an iframe).
+          var dt = window.top && window.top.document.documentElement
+            ? window.top.document.documentElement.getAttribute("data-theme")
+            : null;
+          if (dt === "light" || dt === "dark") return dt;
+        } catch (_e) {
+          /* cross-origin — fall through */
+        }
+        var dt = document.documentElement.getAttribute("data-theme");
+        if (dt === "light" || dt === "dark") return dt;
+        return "dark";
+      }
+
+      function applyTheme(t) {
+        document.documentElement.setAttribute("data-theme", t);
+        // Also forward to the iframe (the SDK listens for helm:context).
+        try {
+          if (frame.contentWindow) {
+            frame.contentWindow.postMessage({
+              type: "helm:context",
+              theme: t,
+              install: install ? { id: install } : null,
+            }, "*");
+          }
+        } catch (_e) {
+          /* iframe not ready yet — it'll catch the next one */
+        }
+      }
+
+      var currentTheme = readHostTheme();
+      document.documentElement.setAttribute("data-theme", currentTheme);
+
+      // Listen for theme updates from the HELM shell.
+      window.addEventListener("message", function (ev) {
+        var data = ev.data;
+        if (!data || typeof data !== "object") return;
+        if (data.type === "helm:theme") {
+          if (data.theme === "light" || data.theme === "dark") {
+            currentTheme = data.theme;
+            applyTheme(currentTheme);
+          }
+        }
+      });
+
+      // When the iframe loads, send our current theme + install context.
+      frame.addEventListener("load", function () {
+        try {
+          frame.contentWindow.postMessage({
+            type: "helm:context",
+            theme: currentTheme,
+            install: install ? { id: install } : null,
+          }, "*");
+        } catch (_e) {
+          /* ignore */
+        }
+        hideVeil();
+      });
+
+      // If the iframe fails to load (network error, 404, etc.) the load
+      // event still fires but the content is the browser's error page —
+      // we let the app render its own error UI for missing assets.
+      frame.addEventListener("error", function () {
+        showError("failed to load app");
+      });
+
+      // ----- toast forwarding ------------------------------------------------
+
+      // The app posts helm:toast messages; we render them as floating
+      // toasts that match the HELM chrome style.
+      var toastTimers = {};
+      function pushToast(opts) {
+        var id = opts.id || ("t-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8));
+        var el = document.createElement("div");
+        el.className = "toast " + (["info", "success", "warning"].indexOf(opts.tone) > -1 ? opts.tone : "info");
+        el.dataset.id = id;
+        el.innerHTML =
+          '<div class="title">' + escapeHtml(opts.title || "") + '</div>' +
+          (opts.description ? '<div class="desc">' + escapeHtml(opts.description) + '</div>' : '');
+        toastViewport.appendChild(el);
+        var duration = typeof opts.duration === "number" ? opts.duration : 4000;
+        if (duration > 0) {
+          toastTimers[id] = setTimeout(function () { dismissToast(id); }, duration);
+        }
+        return id;
+      }
+      function dismissToast(id) {
+        if (toastTimers[id]) {
+          clearTimeout(toastTimers[id]);
+          delete toastTimers[id];
+        }
+        var el = toastViewport.querySelector('[data-id="' + id + '"]');
+        if (el) el.remove();
+      }
+
+      window.addEventListener("message", function (ev) {
+        var data = ev.data;
+        if (!data || typeof data !== "object") return;
+        if (data.type === "helm:toast") {
+          pushToast({
+            title: data.title,
+            description: data.description,
+            tone: data.tone,
+            duration: data.duration,
+          });
+        } else if (data.type === "helm:ready") {
+          // The SDK in the iframe has booted — re-push our context in
+          // case the iframe missed our initial load message.
+          try {
+            ev.source && ev.source.postMessage({
+              type: "helm:context",
+              theme: currentTheme,
+              install: install ? { id: install } : null,
+            }, "*");
+          } catch (_e) { /* ignore */ }
+          hideVeil();
+        } else if (data.type === "helm:navigate") {
+          // App wants to navigate somewhere; do it in the top window so
+          // we leave the embed.
+          if (data.path) {
+            try { window.top.location.href = String(data.path); }
+            catch (_e) { window.location.href = String(data.path); }
+          }
+        }
+      });
+
+      // ----- back button -----------------------------------------------------
+
+      backBtn.addEventListener("click", function () {
+        // Prefer going back to the previous HELM page (we don't have
+        // referrer info reliably — fall back to /apps).
+        try {
+          if (window.top && window.history.length > 1) {
+            window.top.history.back();
+            return;
+          }
+        } catch (_e) { /* ignore */ }
+        try { window.top.location.href = "/apps"; }
+        catch (_e) { window.location.href = "/apps"; }
+      });
+
+      // ----- re-emit theme when the user toggles the host --------------------
+
+      // Poll the host for theme changes (cheap; the host also notifies
+      // us via postMessage, but polling is a belt-and-braces fallback for
+      // a HELM shell that forgets to notify).
+      setInterval(function () {
+        var t = readHostTheme();
+        if (t !== currentTheme) {
+          currentTheme = t;
+          applyTheme(currentTheme);
+        }
+      }, 1500);
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,257 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* -------------------------------------------------------------------------- */
+/* Theming                                                                     */
+/* -------------------------------------------------------------------------- */
+/* Dark = the default ops-console palette (docs §1). Light is a derived
+   palette using the same design tokens inverted: warm off-white surfaces,
+   dark slate text, brass retained for the signature accent.               */
+
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  /* Channel-separated RGB triplets so Tailwind utilities can compose
+     them with the standard `<alpha-value>` placeholder. This is what
+     lets bg-bg, text-text, border-border, etc. read from the live
+     variables at runtime instead of being inlined at build time. */
+  /* Dark surface stack — bg → panelAlt → panel lifted in clearly
+     distinguishable steps so cards/sections pop. */
+  --bg-rgb: 8 10 14;              /* near-black surface */
+  --panel-rgb: 52 60 76;          /* clearly lifted cards (1.79:1 vs bg) */
+  --panelAlt-rgb: 32 38 50;       /* medium sections (1.31:1 vs bg) */
+  --border-rgb: 90 100 116;       /* clearly visible (3.3:1 vs bg) */
+  --borderSoft-rgb: 66 74 88;     /* soft but present (2.2:1 vs bg) */
+  --text-rgb: 237 234 226;
+  --textMuted-rgb: 180 184 196;   /* brighter for dark mode */
+  --textFaint-rgb: 140 145 160;   /* readable in dark */
+  --brass-rgb: 201 162 39;
+  --brassSoft-rgb: 138 114 32;
+  --teal-rgb: 76 156 144;
+  --rust-rgb: 181 83 60;
+  --gridColor: rgba(90, 100, 116, 0.18);
+  --shadowMd: 0 10px 28px rgba(0, 0, 0, 0.65);
+  /* The legacy non-RGB vars are kept for hand-written rules in index.css. */
+  --bg: rgb(var(--bg-rgb));
+  --panel: rgb(var(--panel-rgb));
+  --panelAlt: rgb(var(--panelAlt-rgb));
+  --border: rgb(var(--border-rgb));
+  --borderSoft: rgb(var(--borderSoft-rgb));
+  --text: rgb(var(--text-rgb));
+  --textMuted: rgb(var(--textMuted-rgb));
+  --textFaint: rgb(var(--textFaint-rgb));
+  --brass: rgb(var(--brass-rgb));
+  --brassSoft: rgb(var(--brassSoft-rgb));
+  --teal: rgb(var(--teal-rgb));
+  --rust: rgb(var(--rust-rgb));
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  /* Light theme — warm cream paper with crisp white cards. Visibility
+     comes from:
+       (1) text/border contrast vs bg (all >= 3:1, text 16:1 AAA),
+       (2) pure-white panels against the cream bg,
+       (3) strong structural borders on every card.
+     We intentionally avoid a deep brown panelAlt; the surface hierarchy
+     is carried by panel (white) vs bg (warm cream) plus borders. */
+  --bg-rgb: 245 240 230;          /* warm cream paper */
+  --panel-rgb: 255 255 255;       /* pure white cards */
+  --panelAlt-rgb: 240 232 215;    /* subtle warm cream — section break */
+  --border-rgb: 130 110 80;       /* warm brass-brown — clearly visible */
+  --borderSoft-rgb: 150 130 95;   /* softer but still 3.3:1 vs bg */
+  --text-rgb: 18 22 30;           /* near black — 16:1 AAA */
+  --textMuted-rgb: 55 62 75;      /* dark slate — 9.5:1 AAA */
+  --textFaint-rgb: 96 104 118;    /* readable gray — 4.9:1 AA */
+  --brass-rgb: 135 95 14;         /* medium brass — 5.0:1 AA */
+  --brassSoft-rgb: 160 118 28;    /* lighter brass — 3.6:1 AA-Large */
+  --teal-rgb: 28 90 80;           /* medium teal — 7.0:1 AAA */
+  --rust-rgb: 150 60 42;          /* medium rust — 6.2:1 AA */
+  --gridColor: rgba(18, 22, 30, 0.04);
+  /* Soft shadow gives cards depth against the cream bg without needing
+     a deep panelAlt. Tuned so it's perceptible but not heavy. */
+  --shadowMd: 0 4px 14px rgba(18, 22, 30, 0.10);
+  --bg: rgb(var(--bg-rgb));
+  --panel: rgb(var(--panel-rgb));
+  --panelAlt: rgb(var(--panelAlt-rgb));
+  --border: rgb(var(--border-rgb));
+  --borderSoft: rgb(var(--borderSoft-rgb));
+  --text: rgb(var(--text-rgb));
+  --textMuted: rgb(var(--textMuted-rgb));
+  --textFaint: rgb(var(--textFaint-rgb));
+  --brass: rgb(var(--brass-rgb));
+  --brassSoft: rgb(var(--brassSoft-rgb));
+  --teal: rgb(var(--teal-rgb));
+  --rust: rgb(var(--rust-rgb));
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+  background-image:
+    linear-gradient(to right, var(--gridColor) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--gridColor) 1px, transparent 1px);
+  background-size: 32px 32px;
+  transition: background-color 200ms ease, color 200ms ease;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--brass);
+  border-radius: 2px;
+}
+
+.mono-caps {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Panel surface                                                               */
+/* -------------------------------------------------------------------------- */
+/* Every element with `bg-panel` (white cards on a cream bg) gets a hairline
+   shadow so cards lift visibly against the surface. Without this, the only
+   separation is the border — which disappears if a card uses border-transparent
+   or no border at all. Tuned very light for light mode; deeper for dark. */
+
+[class*="bg-panel"]:not([class*="bg-panelAlt"]):not([class*="shadow-"]) {
+  box-shadow: var(--shadowMd);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 0;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--textFaint);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Skeleton shimmer                                                           */
+/* -------------------------------------------------------------------------- */
+/* The shimmer is a single linear gradient that sweeps across the placeholder.
+   Because it uses `currentColor`-style overlay via background-position,
+   it stays visible against both dark and light surfaces — the highlight is
+   the panelAlt tone of the placeholder's own surface, not a fixed colour.
+   This keeps the shimmer correct in both themes without media queries.   */
+
+.skeleton-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgb(var(--border-rgb) / 0.55) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  background-position: 100% 0;
+  background-repeat: no-repeat;
+  animation: skeleton-shimmer-sweep 1500ms ease-in-out infinite;
+}
+
+@keyframes skeleton-shimmer-sweep {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+/* Reduced motion: kill the shimmer, keep the placeholder solid. */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-shimmer {
+    animation: none;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Toast portal                                                                */
+/* -------------------------------------------------------------------------- */
+/* The toast viewport sits at the bottom-right of the screen. It is rendered
+   into a portal so it escapes any overflow:hidden ancestor (chat panels,
+   modals). The portal root is mounted by ToastProvider.                    */
+
+.toast-viewport {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 100;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  pointer-events: none;
+}
+
+.toast-enter {
+  opacity: 0;
+  transform: translateX(8px);
+}
+.toast-enter-active {
+  opacity: 1;
+  transform: translateX(0);
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+.toast-exit {
+  opacity: 1;
+}
+.toast-exit-active {
+  opacity: 0;
+  transform: translateX(8px);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Route transition                                                            */
+/* -------------------------------------------------------------------------- */
+/* Each route paints inside <main data-route>. We animate the route content
+   on mount so navigation feels deliberate without being slow. The fade
+   respects reduced-motion.                                               */
+
+[data-route] {
+  animation: route-fade-in 220ms ease-out;
+}
+
+@keyframes route-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-route] {
+    animation: none;
+  }
+}

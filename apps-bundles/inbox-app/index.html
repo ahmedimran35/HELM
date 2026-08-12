@@ -1,0 +1,1220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Inbox Triage — HELM</title>
+  <style>
+    :root {
+      --bg: #0B0E12;
+      --panel: #14171d;
+      --panel-alt: #1a1e25;
+      --panel-hi: #1f242c;
+      --border: #2a2f38;
+      --border-soft: #1f232a;
+      --text: #e6e6e6;
+      --text-muted: #9aa0a6;
+      --text-faint: #6a707a;
+      --brass: #C9A227;
+      --brass-soft: #d6b94d;
+      --brass-dim: rgba(201, 162, 39, 0.18);
+      --teal: #4c9c90;
+      --rust: #b5533c;
+      --teal-dim: rgba(76, 156, 144, 0.18);
+      --rust-dim: rgba(181, 83, 60, 0.18);
+      --indigo: #6b7dd0;
+    }
+    html[data-theme="light"] {
+      --bg: #F5F1E8;
+      --panel: #FBF7EE;
+      --panel-alt: #EFE9D9;
+      --panel-hi: #ECE5D2;
+      --border: #C7BFA8;
+      --border-soft: #DBD3BC;
+      --text: #1f232a;
+      --text-muted: #5b625d;
+      --text-faint: #7d847b;
+      --brass: #8a6d12;
+      --brass-soft: #6e560b;
+      --brass-dim: rgba(138, 109, 18, 0.18);
+      --teal: #2d6b62;
+      --rust: #8b3e2a;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", monospace;
+      font-size: 13px;
+      line-height: 1.55;
+      min-height: 100vh;
+    }
+    .mono-caps { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--text-muted); }
+    .tabular { font-variant-numeric: tabular-nums; }
+
+    .app {
+      display: grid;
+      grid-template-columns: 280px 1fr 380px;
+      grid-template-rows: 48px 1fr;
+      height: 100vh;
+      width: 100vw;
+    }
+    @media (max-width: 1100px) {
+      .app { grid-template-columns: 240px 1fr; }
+      .pane { display: none; }
+    }
+
+    .topbar {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--border-soft);
+      background: var(--panel);
+    }
+    .topbar .icon {
+      width: 24px; height: 24px;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--brass); color: var(--bg);
+    }
+    .topbar .title {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+    .topbar .spacer { flex: 1; }
+    .topbar .who {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .topbar .who b { color: var(--text); font-weight: 600; }
+
+    /* left rail */
+    .rail {
+      border-right: 1px solid var(--border-soft);
+      background: var(--panel);
+      padding: 14px 0;
+      overflow-y: auto;
+    }
+    .rail h4 {
+      margin: 0 14px 8px;
+      font-size: 10px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+      font-weight: 600;
+    }
+    .rail .stat {
+      margin: 0 14px 14px;
+      padding: 12px 14px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .rail .stat .cell {
+      text-align: center;
+    }
+    .rail .stat .num {
+      font-size: 22px;
+      font-weight: 600;
+      color: var(--brass);
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.02em;
+    }
+    .rail .stat .lbl {
+      font-size: 9px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+    }
+    .rail .item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 14px;
+      cursor: pointer;
+      font-size: 12px;
+      color: var(--text-muted);
+      border-left: 2px solid transparent;
+      user-select: none;
+    }
+    .rail .item:hover { background: var(--panel-alt); color: var(--text); }
+    .rail .item.active {
+      background: var(--panel-hi);
+      color: var(--text);
+      border-left-color: var(--brass);
+    }
+    .rail .item .count {
+      margin-left: auto;
+      font-size: 10px;
+      color: var(--text-faint);
+      font-variant-numeric: tabular-nums;
+    }
+    .rail .item.active .count { color: var(--brass); }
+
+    .rail .filter {
+      margin: 14px;
+      padding: 10px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+    }
+    .rail .filter label {
+      display: block;
+      font-size: 9px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+      margin-bottom: 4px;
+    }
+    .rail .filter select, .rail .filter input {
+      width: 100%;
+      background: var(--panel-alt);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 11px;
+      padding: 5px 7px;
+    }
+    .rail .filter select + label, .rail .filter input + label {
+      margin-top: 10px;
+    }
+
+    /* list */
+    .list {
+      background: var(--bg);
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+    .list .group-head {
+      padding: 14px 18px 8px;
+      font-size: 10px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--brass);
+      background: var(--bg);
+      border-bottom: 1px solid var(--border-soft);
+      font-weight: 600;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+    .list .row {
+      display: grid;
+      grid-template-columns: 18px 1fr auto;
+      gap: 12px;
+      padding: 12px 18px;
+      border-bottom: 1px solid var(--border-soft);
+      cursor: pointer;
+      align-items: start;
+    }
+    .list .row:hover { background: var(--panel-alt); }
+    .list .row.active {
+      background: var(--panel-hi);
+      border-left: 2px solid var(--brass);
+      padding-left: 16px;
+    }
+    .list .row .star {
+      width: 18px; height: 18px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      color: var(--text-faint);
+    }
+    .list .row .star.starred { color: var(--brass); }
+    .list .row .unread-dot {
+      width: 8px; height: 8px;
+      background: var(--brass);
+      margin-top: 6px;
+    }
+    .list .row.read .unread-dot {
+      background: transparent;
+    }
+    .list .row .sender {
+      font-size: 13px;
+      color: var(--text);
+      font-weight: 600;
+    }
+    .list .row .panel-tag {
+      font-size: 10px;
+      color: var(--text-muted);
+      letter-spacing: 0.06em;
+      margin-left: 6px;
+    }
+    .list .row .preview {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 3px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      line-height: 1.4;
+    }
+    .list .row .when {
+      font-size: 10px;
+      color: var(--text-faint);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      white-space: nowrap;
+      text-align: right;
+    }
+    .list .empty {
+      padding: 50px 20px;
+      text-align: center;
+      color: var(--text-faint);
+      font-size: 12px;
+    }
+    .list .empty .glyph {
+      font-size: 24px;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    /* right pane */
+    .pane {
+      border-left: 1px solid var(--border-soft);
+      background: var(--panel);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .pane .empty {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      color: var(--text-faint);
+      font-size: 12px;
+      gap: 10px;
+    }
+    .pane .pane-head {
+      padding: 16px 20px 12px;
+      border-bottom: 1px solid var(--border-soft);
+    }
+    .pane .pane-head .sender {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .pane .pane-head .meta {
+      font-size: 10px;
+      color: var(--text-muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-top: 4px;
+    }
+    .pane .pane-head .actions {
+      margin-top: 12px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .pane .context {
+      padding: 16px 20px;
+      border-bottom: 1px dashed var(--border-soft);
+      max-height: 220px;
+      overflow-y: auto;
+      background: var(--bg);
+    }
+    .pane .context .ctx-msg {
+      font-size: 11px;
+      color: var(--text-muted);
+      padding: 6px 8px;
+      margin-bottom: 4px;
+      border-left: 2px solid var(--border);
+    }
+    .pane .context .ctx-msg.focus {
+      background: var(--brass-dim);
+      border-left-color: var(--brass);
+      color: var(--text);
+    }
+    .pane .context .ctx-msg .sender {
+      color: var(--text);
+      font-weight: 600;
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      margin-right: 6px;
+    }
+    .pane .context h4 {
+      margin: 0 0 8px;
+      font-size: 10px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+      font-weight: 600;
+    }
+    .pane .body {
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--border-soft);
+      font-size: 13px;
+      color: var(--text);
+      line-height: 1.6;
+      max-height: 240px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+    .pane .composer {
+      padding: 14px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      background: var(--bg);
+      flex: 1;
+      overflow: hidden;
+    }
+    .pane .composer .head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+    }
+    .pane .composer .head h4 {
+      margin: 0;
+      font-size: 10px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--brass);
+      font-weight: 600;
+    }
+    .pane .composer textarea {
+      width: 100%;
+      min-height: 120px;
+      background: var(--panel-alt);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 13px;
+      line-height: 1.6;
+      padding: 10px 12px;
+      resize: vertical;
+    }
+    .pane .composer textarea:focus { outline: 1px solid var(--brass); border-color: var(--brass); }
+    .pane .composer .streamed {
+      background: var(--panel);
+      border: 1px solid var(--brass);
+      padding: 10px 12px;
+      font-size: 12px;
+      color: var(--text);
+      max-height: 200px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+    .pane .composer .streamed .cursor {
+      display: inline-block;
+      width: 8px; height: 13px;
+      background: var(--brass);
+      vertical-align: -2px;
+      margin-left: 2px;
+      animation: blink 1s steps(2) infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+    .pane .composer .actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    .pane .composer .status {
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+    }
+    .pane .composer .status.error { color: var(--rust); }
+    .pane .composer .status.ok { color: var(--teal); }
+
+    button {
+      background: var(--brass);
+      color: var(--bg);
+      border: 1px solid var(--brass);
+      padding: 7px 12px;
+      font-family: inherit;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background 120ms;
+    }
+    button:hover { background: var(--brass-soft); border-color: var(--brass-soft); }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    button.ghost {
+      background: transparent;
+      color: var(--text);
+      border-color: var(--border);
+    }
+    button.ghost:hover { border-color: var(--brass); color: var(--brass); }
+
+    /* chips */
+    .chip {
+      display: inline-block;
+      padding: 3px 8px;
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      border: 1px solid;
+    }
+    .chip-err { color: var(--rust); border-color: var(--rust-dim); background: var(--rust-dim); }
+    .chip-ok { color: var(--teal); border-color: var(--teal-dim); background: var(--teal-dim); }
+    .chip-mute { color: var(--text-faint); border-color: var(--border-soft); background: var(--panel-alt); }
+
+    .no-install {
+      margin: 60px auto;
+      max-width: 480px;
+      padding: 16px;
+      border: 1px solid var(--rust-dim);
+      background: var(--rust-dim);
+      color: var(--rust);
+      font-size: 12px;
+    }
+    .no-install code {
+      background: var(--panel-alt);
+      padding: 1px 6px;
+      border: 1px solid var(--border-soft);
+    }
+
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border); }
+    ::-webkit-scrollbar-thumb:hover { background: var(--brass); }
+  </style>
+</head>
+<body>
+  <div id="root">loading…</div>
+
+  <script>
+    /* ===================================================================
+     * Inbox — flatten every panel the user is on into a single feed.
+     * Star / archive / reply-with-AI from one place. Date groups,
+     * keyboard navigation (j/k/s/e/r), reply composer posts back to
+     * the original panel.
+     * =================================================================== */
+    const params = new URLSearchParams(location.search);
+    const installIdFromUrl = params.get("install");
+
+    const state = {
+      sdk: null,
+      install: installIdFromUrl,
+      me: null,
+      theme: "dark",
+      panels: [],
+      allMessages: [],          // flat list w/ panel attribution
+      // persisted per-install:
+      readIds: {},              // messageId -> true
+      starredIds: {},           // messageId -> true
+      archivedIds: {},          // messageId -> true
+      // UI state:
+      tab: "all",               // "all" | "unread" | "starred" | "archived" | panelId
+      senderFilter: "",
+      dateFilter: "any",        // any | today | 7d | 30d
+      visible: [],              // filtered + sorted ids
+      activeId: null,
+      modelId: null,
+      reply: {                  // composer state
+        text: "",
+        streaming: false,
+        streamed: "",
+        status: null,
+        error: null,
+      },
+      loading: true,
+      loadError: null,
+    };
+
+    function escapeHtml(s) {
+      return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+      }[c]));
+    }
+    function applyTheme(theme) {
+      state.theme = theme === "light" ? "light" : "dark";
+      document.documentElement.setAttribute("data-theme", state.theme);
+    }
+
+    async function waitForSDK(timeoutMs = 4000) {
+      const start = Date.now();
+      while (Date.now() - start < timeoutMs) {
+        if (window.helmApp && window.helmApp.ready) {
+          try { await window.helmApp.ready; return window.helmApp; }
+          catch (_) {}
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      return null;
+    }
+    async function bootstrapStandalone() {
+      if (!installIdFromUrl) return null;
+      try {
+        const r = await fetch(`/api/apps/bootstrap?install=${encodeURIComponent(installIdFromUrl)}`, { credentials: "include" });
+        if (!r.ok) return null;
+        return await r.json();
+      } catch (_) { return null; }
+    }
+
+    async function apiGet(path) {
+      if (state.sdk && state.sdk.callAPI) return state.sdk.callAPI(path, { method: "GET" });
+      const r = await fetch(`/api${path}`, { credentials: "include" });
+      if (!r.ok) throw new Error(`${r.status} GET ${path}`);
+      return r.json();
+    }
+    async function dataGet(key) {
+      if (state.sdk && state.sdk.data && state.sdk.data.get) {
+        const r = await state.sdk.data.get(key);
+        return r && r.value !== undefined ? r.value : r;
+      }
+      if (!state.install) return null;
+      const r = await fetch(`/api/app-data/${state.install}/${encodeURIComponent(key)}`, { credentials: "include" });
+      if (!r.ok) return null;
+      return (await r.json()).value;
+    }
+    async function dataSet(key, value) {
+      if (state.sdk && state.sdk.data && state.sdk.data.set) return state.sdk.data.set(key, value);
+      if (!state.install) return;
+      await fetch(`/api/app-data/${state.install}/${encodeURIComponent(key)}`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value }),
+      });
+    }
+    function toast(opts) {
+      if (state.sdk && state.sdk.toast) return state.sdk.toast(opts);
+      console.log("[toast]", opts);
+    }
+    async function copyText(text) {
+      if (state.sdk && state.sdk.copy) return state.sdk.copy(text);
+      try { return navigator.clipboard.writeText(text); } catch (_) { return Promise.reject(new Error("copy failed")); }
+    }
+
+    /* ===================================================================
+     * Loading
+     * =================================================================== */
+    async function pickModel() {
+      try {
+        const models = await apiGet("/models");
+        const assigned = models.find((m) => m.assigned && m.state === "active");
+        const any = models.find((m) => m.state === "active");
+        return (assigned || any || {}).id || null;
+      } catch (_) { return null; }
+    }
+    async function loadPanels() {
+      state.panels = await apiGet("/panels");
+    }
+    async function loadMessages() {
+      // Fetch every panel's recent messages in parallel.
+      const per = await Promise.all(state.panels.map(async (p) => {
+        try {
+          const msgs = await apiGet(`/panels/${p.id}/messages?limit=50`);
+          return msgs
+            .filter((m) => m.role === "user") // user messages only — inbox is about what teammates sent
+            .map((m) => ({
+              id: m.id,
+              panel_id: p.id,
+              panel_name: p.name,
+              user_id: m.user_id,
+              sender_name: m.sender_name,
+              content: m.content || "",
+              created_at: m.created_at,
+            }));
+        } catch (_) { return []; }
+      }));
+      state.allMessages = per.flat().sort((a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+    }
+    async function loadPersistent() {
+      const [read, starred, archived] = await Promise.all([
+        dataGet("read_ids"),
+        dataGet("starred_ids"),
+        dataGet("archived_ids"),
+      ]);
+      state.readIds = (read && typeof read === "object") ? read : {};
+      state.starredIds = (starred && typeof starred === "object") ? starred : {};
+      state.archivedIds = (archived && typeof archived === "object") ? archived : {};
+    }
+    async function savePersistent(field) {
+      const map = {
+        read: state.readIds,
+        starred: state.starredIds,
+        archived: state.archivedIds,
+      }[field];
+      await dataSet(`${field}_ids`, map);
+    }
+
+    /* ===================================================================
+     * Filtering + grouping
+     * =================================================================== */
+    function dateBucket(iso) {
+      const d = new Date(iso);
+      const now = new Date();
+      const dStart = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      const nStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const diffDays = Math.floor((nStart - dStart) / (24 * 3600 * 1000));
+      if (diffDays <= 0) return "Today";
+      if (diffDays === 1) return "Yesterday";
+      if (diffDays < 7) return "This week";
+      if (diffDays < 30) return "Earlier this month";
+      return "Older";
+    }
+
+    function isUnread(m) { return !state.readIds[m.id]; }
+    function isStarred(m) { return !!state.starredIds[m.id]; }
+    function isArchived(m) { return !!state.archivedIds[m.id]; }
+
+    function applyFilter() {
+      const filterTab = state.tab;
+      const senderQ = state.senderFilter.trim().toLowerCase();
+      const since = state.dateFilter === "today" ? Date.now() - 24 * 3600e3
+                  : state.dateFilter === "7d" ? Date.now() - 7 * 24 * 3600e3
+                  : state.dateFilter === "30d" ? Date.now() - 30 * 24 * 3600e3
+                  : null;
+      state.visible = state.allMessages.filter((m) => {
+        // archived only shows in "archived" tab
+        if (filterTab !== "archived" && isArchived(m)) return false;
+        if (filterTab === "archived" && !isArchived(m)) return false;
+        if (filterTab === "unread" && !isUnread(m)) return false;
+        if (filterTab === "starred" && !isStarred(m)) return false;
+        // panel tab — exact match
+        if (filterTab !== "all" && filterTab !== "unread" && filterTab !== "starred" && filterTab !== "archived" && m.panel_id !== filterTab) return false;
+        if (senderQ) {
+          const sn = (m.sender_name || "").toLowerCase();
+          if (!sn.includes(senderQ)) return false;
+        }
+        if (since && new Date(m.created_at).getTime() < since) return false;
+        return true;
+      });
+    }
+
+    /* ===================================================================
+     * Mutations
+     * =================================================================== */
+    function setRead(id, val) {
+      if (val) state.readIds[id] = true;
+      else delete state.readIds[id];
+      savePersistent("read");
+      paint();
+    }
+    function toggleStar(id) {
+      if (state.starredIds[id]) delete state.starredIds[id];
+      else state.starredIds[id] = true;
+      savePersistent("starred");
+      paint();
+    }
+    function archive(id) {
+      state.archivedIds[id] = true;
+      savePersistent("archived");
+      if (state.activeId === id) {
+        // move selection to next visible
+        const idx = state.visible.indexOf(id);
+        const next = state.visible[idx + 1] || state.visible[idx - 1] || null;
+        state.activeId = next;
+        state.reply = { text: "", streaming: false, streamed: "", status: null, error: null };
+      }
+      paint();
+    }
+    function unarchive(id) {
+      delete state.archivedIds[id];
+      savePersistent("archived");
+      paint();
+    }
+
+    /* ===================================================================
+     * Reply composer (AI-generated, posted back to source panel)
+     * =================================================================== */
+    async function startReply() {
+      const m = state.allMessages.find((x) => x.id === state.activeId);
+      if (!m) return;
+      if (!state.modelId) {
+        state.reply.error = "no model assigned";
+        paint();
+        return;
+      }
+      state.reply.text = "";
+      state.reply.streamed = "";
+      state.reply.streaming = true;
+      state.reply.status = "drafting";
+      state.reply.error = null;
+      paint();
+      // focus textarea so user can override
+      setTimeout(() => {
+        const ta = document.getElementById("reply-input");
+        if (ta) ta.focus();
+      }, 0);
+
+      const panel = state.panels.find((p) => p.id === m.panel_id);
+      const sys =
+        "You are drafting a short reply on behalf of the user to a message from a teammate. " +
+        "Keep it to 1–3 sentences. Match the conversational tone. Don't use markdown headings, " +
+        "don't include a signature. Address the sender's specific point.";
+      const ctxSnippet = `From: ${m.sender_name || "teammate"}\nPanel: ${panel ? panel.name : "(panel)"}\n\nTheir message:\n${m.content}\n\n---\nDraft a reply.`;
+      const content = ctxSnippet;
+
+      let resp;
+      try {
+        resp = await fetch("/api/chat", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model_id: state.modelId, system: sys, content }),
+        });
+      } catch (e) {
+        state.reply.streaming = false;
+        state.reply.error = String(e.message || e);
+        paint();
+        return;
+      }
+      if (!resp.ok) {
+        let msg = `${resp.status}`;
+        try { msg = (await resp.json()).error || msg; } catch (_) {}
+        state.reply.streaming = false;
+        state.reply.error = `chat failed · ${msg}`;
+        paint();
+        return;
+      }
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let assembled = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf("\n\n")) !== -1) {
+          const frame = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const ev = parseSSE(frame);
+          if (!ev) continue;
+          if (ev.event === "token") {
+            try {
+              const j = JSON.parse(ev.data);
+              if (j.delta) {
+                assembled += j.delta;
+                state.reply.streamed = assembled;
+                state.reply.text = assembled;
+                paint();
+              }
+            } catch (_) {}
+          } else if (ev.event === "error") {
+            try { state.reply.error = (JSON.parse(ev.data)).message || "stream error"; }
+            catch (_) { state.reply.error = "stream error"; }
+          }
+        }
+      }
+      state.reply.streaming = false;
+      state.reply.streamed = assembled;
+      state.reply.text = assembled;
+      state.reply.status = "ready";
+      paint();
+    }
+
+    function parseSSE(frame) {
+      let event = "message";
+      let data = "";
+      for (const line of frame.split("\n")) {
+        if (line.startsWith("event:")) event = line.slice(6).trim();
+        else if (line.startsWith("data:")) data += line.slice(5).trim();
+      }
+      if (!data) return null;
+      return { event, data };
+    }
+
+    async function sendReply() {
+      const m = state.allMessages.find((x) => x.id === state.activeId);
+      if (!m) return;
+      const text = state.reply.text.trim();
+      if (!text) { state.reply.error = "empty reply"; paint(); return; }
+      state.reply.status = "sending";
+      state.reply.error = null;
+      paint();
+      try {
+        // /api/panels/:id/messages does not support POST; panel chat goes
+        // over WebSocket. If the SDK exposes sendPanelMessage, use it.
+        // Otherwise fall back to clipboard + a host toast.
+        if (state.sdk && state.sdk.sendPanelMessage) {
+          await state.sdk.sendPanelMessage(m.panel_id, text);
+        } else {
+          await copyText(text);
+          state.reply.status = "copied";
+          toast({
+            tone: "info",
+            title: "copied to clipboard",
+            description: "paste into the panel — messages go over WebSocket, not HTTP.",
+          });
+          // mark reply as archived so the inbox calms down
+          archive(m.id);
+          paint();
+          return;
+        }
+        // Success — archive the source message and clear the composer.
+        archive(m.id);
+        state.reply = { text: "", streaming: false, streamed: "", status: "sent", error: null };
+        toast({ tone: "success", title: "reply sent", description: m.panel_name });
+      } catch (e) {
+        state.reply.status = null;
+        state.reply.error = String(e.message || e);
+        toast({ tone: "error", title: "send failed", description: state.reply.error });
+      }
+      paint();
+    }
+
+    /* ===================================================================
+     * Keyboard
+     * =================================================================== */
+    function onKey(e) {
+      const tag = (e.target.tagName || "").toLowerCase();
+      const inField = tag === "input" || tag === "textarea" || tag === "select";
+      const isMod = e.metaKey || e.ctrlKey;
+      if (isMod && e.key === "Enter") {
+        if (state.reply.text.trim() && !state.reply.streaming) {
+          e.preventDefault();
+          sendReply();
+        }
+        return;
+      }
+      if (inField) return;
+      if (e.key === "j") { e.preventDefault(); moveSelection(1); return; }
+      if (e.key === "k") { e.preventDefault(); moveSelection(-1); return; }
+      if (e.key === "s") { e.preventDefault(); if (state.activeId) toggleStar(state.activeId); return; }
+      if (e.key === "e") {
+        e.preventDefault();
+        if (state.activeId && !isArchived({ id: state.activeId })) {
+          archive(state.activeId);
+        }
+        return;
+      }
+      if (e.key === "r") {
+        e.preventDefault();
+        if (state.activeId) startReply();
+        return;
+      }
+      if (e.key === "Escape") {
+        if (state.reply.status === "sent" || state.reply.status === "copied") {
+          state.reply = { text: "", streaming: false, streamed: "", status: null, error: null };
+          paint();
+        }
+        return;
+      }
+    }
+
+    function moveSelection(dir) {
+      const ids = state.visible;
+      if (ids.length === 0) return;
+      const idx = ids.indexOf(state.activeId);
+      let next = idx + dir;
+      if (next < 0) next = 0;
+      if (next >= ids.length) next = ids.length - 1;
+      state.activeId = ids[next];
+      if (state.activeId && !state.readIds[state.activeId]) {
+        state.readIds[state.activeId] = true;
+        savePersistent("read");
+      }
+      state.reply = { text: "", streaming: false, streamed: "", status: null, error: null };
+      paint();
+    }
+
+    /* ===================================================================
+     * Paint
+     * =================================================================== */
+    function fmtTime(iso) {
+      const d = new Date(iso);
+      const now = new Date();
+      const sameDay = d.toDateString() === now.toDateString();
+      if (sameDay) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      const diffDays = Math.floor((now - d) / (24 * 3600 * 1000));
+      if (diffDays < 7) return d.toLocaleDateString(undefined, { weekday: "short" }) + " " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    }
+
+    function preview(m) {
+      const s = (m.content || "").replace(/\s+/g, " ");
+      return s.length > 200 ? s.slice(0, 200) + "…" : s;
+    }
+
+    function buildContext(m) {
+      // Up to 3 messages before in the same panel, in chronological order.
+      const samePanel = state.allMessages
+        .filter((x) => x.panel_id === m.panel_id)
+        .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+      const idx = samePanel.findIndex((x) => x.id === m.id);
+      const before = samePanel.slice(Math.max(0, idx - 3), idx);
+      const items = [...before, m];
+      return items.map((x) => `
+        <div class="ctx-msg ${x.id === m.id ? "focus" : ""}">
+          <span class="sender">${escapeHtml(x.sender_name || "—")}</span>
+          ${escapeHtml((x.content || "").replace(/\s+/g, " ").slice(0, 240))}${(x.content || "").length > 240 ? "…" : ""}
+        </div>`).join("");
+    }
+
+    function paint() {
+      const root = document.getElementById("root");
+
+      if (!state.install) {
+        root.innerHTML = `
+          <div class="no-install">
+            <strong>no install context.</strong>
+            open this app from the HELM admin <em>Apps</em> tab or via a panel that has it installed.
+            the SDK or <code>?install=&lt;uuid&gt;</code> supplies the install id.
+          </div>`;
+        return;
+      }
+
+      applyFilter();
+
+      // Counts
+      const unreadCount = state.allMessages.filter((m) => isUnread(m) && !isArchived(m)).length;
+      const starredCount = Object.keys(state.starredIds).filter((id) => state.allMessages.some((m) => m.id === id && !isArchived(m))).length;
+      const archivedCount = state.allMessages.filter(isArchived).length;
+      const panelCounts = {};
+      for (const m of state.allMessages) {
+        if (isArchived(m)) continue;
+        panelCounts[m.panel_id] = (panelCounts[m.panel_id] || 0) + 1;
+      }
+
+      // Group by date
+      const groups = new Map();
+      for (const m of state.visible) {
+        const b = dateBucket(m.created_at);
+        if (!groups.has(b)) groups.set(b, []);
+        groups.get(b).push(m);
+      }
+      const groupOrder = ["Today", "Yesterday", "This week", "Earlier this month", "Older"];
+      const groupsHTML = [...groups.entries()]
+        .sort((a, b) => groupOrder.indexOf(a[0]) - groupOrder.indexOf(b[0]))
+        .map(([label, items]) => `
+          <div class="group-head">${escapeHtml(label)} · ${items.length}</div>
+          ${items.map((m) => `
+            <div class="row ${state.readIds[m.id] ? "read" : ""} ${state.activeId === m.id ? "active" : ""}" data-id="${escapeHtml(m.id)}">
+              <div class="star ${state.starredIds[m.id] ? "starred" : ""}" data-star="${escapeHtml(m.id)}">${state.starredIds[m.id] ? "★" : "☆"}</div>
+              <div>
+                <div>
+                  <span class="sender">${escapeHtml(m.sender_name || "—")}</span>
+                  <span class="panel-tag">${escapeHtml(m.panel_name)}</span>
+                </div>
+                <div class="preview">${escapeHtml(preview(m))}</div>
+              </div>
+              <div class="when">${fmtTime(m.created_at)}</div>
+            </div>
+          `).join("")}
+        `).join("");
+
+      const topbar = `
+        <div class="topbar">
+          <div class="icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square">
+              <path d="M3 7l9 6 9-6"/>
+              <rect x="3" y="5" width="18" height="14"/>
+            </svg>
+          </div>
+          <div>
+            <div class="title">Inbox Triage</div>
+          </div>
+          <div class="spacer"></div>
+          <div class="who"><b>${escapeHtml((state.me && (state.me.name || state.me.username)) || "you")}</b> · ${state.allMessages.length} msg</div>
+        </div>
+      `;
+
+      const rail = `
+        <aside class="rail">
+          <h4>Stats</h4>
+          <div class="stat">
+            <div class="cell"><div class="num">${unreadCount}</div><div class="lbl">unread</div></div>
+            <div class="cell"><div class="num">${starredCount}</div><div class="lbl">starred</div></div>
+          </div>
+          <h4>Views</h4>
+          <div class="item ${state.tab === "all" ? "active" : ""}" data-tab="all"><span>◇</span><span>all</span><span class="count">${state.allMessages.filter((m) => !isArchived(m)).length}</span></div>
+          <div class="item ${state.tab === "unread" ? "active" : ""}" data-tab="unread"><span>◌</span><span>unread</span><span class="count">${unreadCount}</span></div>
+          <div class="item ${state.tab === "starred" ? "active" : ""}" data-tab="starred"><span>★</span><span>starred</span><span class="count">${starredCount}</span></div>
+          <div class="item ${state.tab === "archived" ? "active" : ""}" data-tab="archived"><span>◫</span><span>archived</span><span class="count">${archivedCount}</span></div>
+
+          <h4 style="margin-top:18px;">Panels</h4>
+          ${state.panels.map((p) => `
+            <div class="item ${state.tab === p.id ? "active" : ""}" data-tab="${escapeHtml(p.id)}">
+              <span>▤</span><span>${escapeHtml(p.name)}</span>
+              <span class="count">${panelCounts[p.id] || 0}</span>
+            </div>
+          `).join("")}
+
+          <div class="filter">
+            <label>From</label>
+            <input id="sender-input" placeholder="sender name" value="${escapeHtml(state.senderFilter)}" />
+            <label>When</label>
+            <select id="date-input">
+              <option value="any" ${state.dateFilter === "any" ? "selected" : ""}>any time</option>
+              <option value="today" ${state.dateFilter === "today" ? "selected" : ""}>today</option>
+              <option value="7d" ${state.dateFilter === "7d" ? "selected" : ""}>last 7 days</option>
+              <option value="30d" ${state.dateFilter === "30d" ? "selected" : ""}>last 30 days</option>
+            </select>
+          </div>
+        </aside>
+      `;
+
+      const list = `
+        <section class="list">
+          ${state.visible.length === 0
+            ? `<div class="empty">
+                <div class="glyph">∅</div>
+                <div>inbox empty${state.tab !== "all" ? " for this view" : ""}.</div>
+                ${state.loadError ? `<div class="chip chip-err" style="margin-top:12px;">${escapeHtml(state.loadError)}</div>` : ""}
+              </div>`
+            : groupsHTML}
+        </section>
+      `;
+
+      let pane;
+      if (!state.activeId) {
+        pane = `<section class="pane"><div class="empty">
+          <div style="font-size:24px;color:var(--text-muted);">�</div>
+          <div>select a message to read &amp; reply</div>
+          <div style="font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:var(--text-faint);margin-top:10px;">
+            <kbd style="font-family:inherit;background:var(--panel-alt);padding:1px 5px;border:1px solid var(--border);">j</kbd>/<kbd style="font-family:inherit;background:var(--panel-alt);padding:1px 5px;border:1px solid var(--border);">k</kbd> ·
+            <kbd style="font-family:inherit;background:var(--panel-alt);padding:1px 5px;border:1px solid var(--border);">s</kbd> star ·
+            <kbd style="font-family:inherit;background:var(--panel-alt);padding:1px 5px;border:1px solid var(--border);">e</kbd> archive ·
+            <kbd style="font-family:inherit;background:var(--panel-alt);padding:1px 5px;border:1px solid var(--border);">r</kbd> reply
+          </div>
+        </div></section>`;
+      } else {
+        const m = state.allMessages.find((x) => x.id === state.activeId);
+        if (!m) {
+          pane = `<section class="pane"><div class="empty">message not found</div></section>`;
+        } else {
+          // mark as read
+          if (!state.readIds[m.id]) {
+            state.readIds[m.id] = true;
+            savePersistent("read");
+          }
+          const archived = isArchived(m);
+          pane = `
+            <section class="pane">
+              <div class="pane-head">
+                <div class="sender">${escapeHtml(m.sender_name || "—")}</div>
+                <div class="meta">in <b>${escapeHtml(m.panel_name)}</b> · ${fmtTime(m.created_at)}</div>
+                <div class="actions">
+                  <button id="star-btn" class="${state.starredIds[m.id] ? "" : "ghost"}">${state.starredIds[m.id] ? "★ starred" : "☆ star"}</button>
+                  <button id="archive-btn" class="ghost">${archived ? "restore" : "archive"}</button>
+                  <button id="reply-btn" class="ghost" ${archived ? "disabled" : ""}>${state.reply.streaming ? "drafting…" : "ai reply"}</button>
+                </div>
+              </div>
+              <div class="context">
+                <h4>Context · ${escapeHtml(m.panel_name)}</h4>
+                ${buildContext(m)}
+              </div>
+              <div class="body">${escapeHtml(m.content || "")}</div>
+              <div class="composer">
+                <div class="head">
+                  <h4>Reply · to ${escapeHtml(m.sender_name || "sender")} in ${escapeHtml(m.panel_name)}</h4>
+                  <span class="status ${state.reply.error ? "error" : state.reply.status === "ready" || state.reply.status === "sent" ? "ok" : ""}">${escapeHtml(state.reply.error || state.reply.status || "")}</span>
+                </div>
+                ${state.reply.streaming
+                  ? `<div class="streamed">${escapeHtml(state.reply.streamed || "")}<span class="cursor"></span></div>`
+                  : `<textarea id="reply-input" placeholder="type a reply, or press AI Reply to draft">${escapeHtml(state.reply.text)}</textarea>`
+                }
+                <div class="actions">
+                  <button id="copy-btn" class="ghost" ${!state.reply.text ? "disabled" : ""}>copy</button>
+                  <button id="send-btn" ${!state.reply.text.trim() || state.reply.streaming ? "disabled" : ""}>send (⌘↵)</button>
+                </div>
+              </div>
+            </section>
+          `;
+        }
+      }
+
+      root.innerHTML = `
+        <div class="app">
+          ${topbar}
+          ${rail}
+          ${list}
+          ${pane}
+        </div>
+      `;
+
+      // Wire
+      for (const el of root.querySelectorAll(".rail .item[data-tab]")) {
+        el.onclick = () => { state.tab = el.dataset.tab; paint(); };
+      }
+      const sender = document.getElementById("sender-input");
+      if (sender) sender.oninput = (e) => { state.senderFilter = e.target.value; paint(); setTimeout(() => { const s = document.getElementById("sender-input"); if (s) { s.focus(); s.setSelectionRange(state.senderFilter.length, state.senderFilter.length); } }, 0); };
+      const date = document.getElementById("date-input");
+      if (date) date.onchange = (e) => { state.dateFilter = e.target.value; paint(); };
+
+      for (const el of root.querySelectorAll(".list .row[data-id]")) {
+        el.onclick = (e) => {
+          // ignore clicks on the star button
+          if (e.target.closest("[data-star]")) return;
+          state.activeId = el.dataset.id;
+          if (!state.readIds[state.activeId]) {
+            state.readIds[state.activeId] = true;
+            savePersistent("read");
+          }
+          state.reply = { text: "", streaming: false, streamed: "", status: null, error: null };
+          paint();
+        };
+      }
+      for (const el of root.querySelectorAll(".list .star[data-star]")) {
+        el.onclick = (e) => { e.stopPropagation(); toggleStar(el.dataset.star); };
+      }
+      const star = document.getElementById("star-btn");
+      if (star) star.onclick = () => { toggleStar(state.activeId); };
+      const arch = document.getElementById("archive-btn");
+      if (arch) arch.onclick = () => { if (isArchived({ id: state.activeId })) unarchive(state.activeId); else archive(state.activeId); };
+      const replyBtn = document.getElementById("reply-btn");
+      if (replyBtn) replyBtn.onclick = () => startReply();
+      const sendBtn = document.getElementById("send-btn");
+      if (sendBtn) sendBtn.onclick = () => sendReply();
+      const copyBtn = document.getElementById("copy-btn");
+      if (copyBtn) copyBtn.onclick = async () => {
+        try { await copyText(state.reply.text); toast({ tone: "success", title: "copied" }); }
+        catch (_) { toast({ tone: "error", title: "copy failed" }); }
+      };
+      const ta = document.getElementById("reply-input");
+      if (ta) ta.oninput = (e) => { state.reply.text = e.target.value; paint({ keepFocus: true }); setTimeout(() => { const t = document.getElementById("reply-input"); if (t) { t.focus(); t.setSelectionRange(state.reply.text.length, state.reply.text.length); } }, 0); };
+    }
+
+    /* ===================================================================
+     * Boot
+     * =================================================================== */
+    async function boot() {
+      const sdk = await waitForSDK();
+      state.sdk = sdk;
+      if (sdk) {
+        if (sdk.me) state.me = sdk.me;
+        if (sdk.theme) applyTheme(sdk.theme);
+        if (!state.install && sdk.install) state.install = sdk.install;
+        if (sdk.onThemeChange) sdk.onThemeChange(applyTheme);
+      } else {
+        const b = await bootstrapStandalone();
+        if (b) {
+          if (b.me) state.me = b.me;
+          if (b.install_id) state.install = b.install_id;
+          if (b.theme) applyTheme(b.theme);
+        }
+        const mql = window.matchMedia("(prefers-color-scheme: light)");
+        mql.addEventListener("change", (e) => applyTheme(e.matches ? "light" : "dark"));
+        applyTheme(mql.matches ? "light" : "dark");
+      }
+
+      if (!state.install) { paint(); return; }
+
+      try {
+        await loadPanels();
+        await loadMessages();
+        await loadPersistent();
+        state.modelId = await pickModel();
+      } catch (e) {
+        state.loadError = String(e.message || e);
+      }
+      state.loading = false;
+      paint();
+    }
+
+    document.addEventListener("keydown", onKey);
+    boot().catch((e) => {
+      state.loadError = String(e.message || e);
+      paint();
+    });
+  </script>
+</body>
+</html>

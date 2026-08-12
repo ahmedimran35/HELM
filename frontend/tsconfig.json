@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+    "noEmit": true,
+    "useDefineForClassFields": true
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
+}

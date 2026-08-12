@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>HELM</title>
+    <!-- Inline theme bootstrap — runs BEFORE React mounts so the correct
+         data-theme attribute is already on <html> for first paint. Without
+         this, light-mode users see a flash of the dark default while the
+         ThemeProvider's useEffect catches up after first render. -->
+    <script>
+      (function () {
+        try {
+          var saved = window.localStorage.getItem("helm.theme");
+          var theme = saved === "light" || saved === "dark" ? saved : "light";
+          document.documentElement.setAttribute("data-theme", theme);
+        } catch (_) {
+          // localStorage may be unavailable (private mode, etc.); fall back
+          // to the CSS default by explicitly setting data-theme.
+          document.documentElement.setAttribute("data-theme", "light");
+        }
+      })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body class="font-body">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

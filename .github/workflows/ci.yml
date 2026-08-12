@@ -1,0 +1,91 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  typecheck:
+    name: typecheck (backend + frontend)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ matrix.workspace }}
+    strategy:
+      fail-fast: false
+      matrix:
+        workspace: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+
+  migrate:
+    name: migrations apply cleanly on a fresh DB
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: helm
+          POSTGRES_PASSWORD: helm_dev
+          POSTGRES_DB: helm
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U helm"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ADMIN_USERNAME: ci_admin
+      ADMIN_PASSWORD: ci-admin-password-123
+      DATABASE_URL: postgres://helm:helm_dev@localhost:5432/helm
+      REDIS_URL: redis://localhost:6379
+      SESSION_SECRET: ci-only-secret-do-not-use-anywhere-real
+      API_PORT: "3000"
+      WEB_ORIGIN: http://localhost:5173
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3
+      - run: bun install --frozen-lockfile
+      - run: bun run db:migrate
+      - run: bun run typecheck
+      # Boot, confirm bootstrap seeded the admin, log in, hit /me, log out.
+      - run: |
+          bun run start &
+          SERVER_PID=$!
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsS http://localhost:3000/api/health >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.5
+          done
+          curl -fsS http://localhost:3000/api/bootstrap-status
+          echo
+          curl -fsS -c jar -X POST http://localhost:3000/api/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"ci_admin","password":"ci-admin-password-123"}'
+          echo
+          curl -fsS -b jar http://localhost:3000/api/me
+          echo
+          curl -fsS -b jar -c jar -X POST http://localhost:3000/api/logout
+          echo
+          kill $SERVER_PID

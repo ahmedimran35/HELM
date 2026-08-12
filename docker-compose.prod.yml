@@ -1,0 +1,78 @@
+# docker-compose.prod.yml — production-grade deployment.
+#
+# USAGE:
+#   1. Generate strong secrets: SESSION=$(openssl rand -base64 48) \
+#                                       ADMIN=$(openssl rand -base64 24) \
+#                                       DB=$(openssl rand -base64 32)
+#   2. Create .env.prod with:
+#        SESSION_SECRET=$SESSION
+#        ADMIN_PASSWORD=$ADMIN
+#        DATABASE_URL=postgres://helm:$DB@postgres:5432/helm
+#        WEB_ORIGIN=https://app.example.com
+#        HELM_TRUSTED_PROXY=1
+#   3. docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# This file layers on top of docker-compose.yml with all the security
+# hardening that compose can express directly. The Dockerfile-level
+# hardening (read-only fs, dropped caps, no-new-privileges) is documented
+# in /Users/imran/CwLab/HARDENING.md.
+
+services:
+  postgres:
+    # Override dev password with a required env. The dev compose has
+    # a default; this overlay removes the default and fails fast if
+    # POSTGRES_PASSWORD is unset.
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    # Read-only root, tmpfs for writable paths, drop all caps, no
+    # new privileges. (See HARDENING.md §1.)
+    read_only: true
+    tmpfs:
+      - /var/run/postgresql:rw,noexec,nosuid,size=64m
+      - /tmp:rw,noexec,nosuid,size=128m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges]
+    user: "999:999"
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: helm-api:prod
+    environment:
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
+      DATABASE_URL: postgres://helm:${POSTGRES_PASSWORD}@postgres:5432/helm
+      WEB_ORIGIN: ${WEB_ORIGIN:?WEB_ORIGIN is required}
+      HELM_TRUSTED_PROXY: "1"
+      NODE_ENV: production
+      # Audit retention: 1 year (regulatory default).
+      HELM_AUDIT_RETENTION_DAYS: "365"
+      # Login lockout: 5 attempts → 15 min lockout.
+      HELM_LOGIN_LOCKOUT_THRESHOLD: "5"
+      HELM_LOGIN_LOCKOUT_MINUTES: "15"
+      # Session idle timeout: 8 hours (matches a typical workday).
+      HELM_IDLE_TTL_SECONDS: "28800"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges]
+    user: "65532:65532"
+    # Healthcheck matches Dockerfile.
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # lightpanda: same as dev but hardened.
+  lightpanda:
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges]
+    user: "65532:65532"
