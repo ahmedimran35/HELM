@@ -102,9 +102,9 @@ flowchart LR
   WF --> SAFE --> PG
   WF <--> AUTH
   AUTH -->|alerts| ALERT
-  ALERT -.->|HELM_ALERT_WEBHOOK_URL| Slack
+  ALERT -.->|webhook| Slack
   AUTH -->|cron| AUDIT_RET --> PG
-  UI -.opt.->|rate limit| REDIS
+  UI -.-> REDIS
 ```
 
 Three architectural decisions worth calling out:
