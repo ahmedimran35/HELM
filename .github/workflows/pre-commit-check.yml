@@ -1,0 +1,58 @@
+# pre-commit-check.yml — sanity-check the .pre-commit-config.yaml file.
+#
+# We DON'T run pre-commit itself here (gitleaks already runs on every
+# push via .github/workflows/secret-scan.yml). What we DO check is:
+#   1. the config file parses as valid YAML
+#   2. every `rev:` field points to a real, reachable git ref
+#   3. the schema matches the pre-commit framework's expectations
+#
+# This catches stale-pinned hooks before they break `pre-commit
+# install` on a fresh checkout.
+
+name: pre-commit-check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate-config:
+    name: validate .pre-commit-config.yaml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pre-commit
+        run: pipx install pre-commit || pip install --user pre-commit
+      - name: Validate config + hook refs resolve
+        run: |
+          # `pre-commit validate-config` parses + schema-checks the file
+          # without running any hooks. This is the canonical "did you
+          # break the YAML" check.
+          pre-commit validate-config .pre-commit-config.yaml
+
+          # `pre-commit validate-manifest` resolves every `rev:` to a
+          # git commit hash and pins it. Without this, a typo in a
+          # version tag would silently fall back to a different hook.
+          pre-commit validate-manifest .pre-commit-config.yaml
+
+      # Smoke-test the install path. This catches dependency / network
+      # issues that wouldn't show up in the validate-* steps. We
+      # intentionally don't `pre-commit run --all-files` because
+      # gitleaks is already wired into secret-scan.yml.
+      - name: Install hooks (no execution)
+        run: pre-commit install --install-hooks
+
+      - name: Verify the gitleaks hook is present
+        run: |
+          # Fail loudly if the hook list doesn't include gitleaks.
+          # Means somebody swapped it out without updating this check.
+          if ! pre-commit run --all-files --hook-stage manual gitleaks --help 2>&1 | grep -q 'gitleaks'; then
+            echo "::error::.pre-commit-config.yaml is missing the gitleaks hook"
+            exit 1
+          fi
+          echo "gitleaks hook registered correctly"

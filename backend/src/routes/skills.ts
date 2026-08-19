@@ -31,6 +31,7 @@ import { sql } from "../db/client.ts";
 import { requireAuth } from "../middleware/auth.ts";
 import { requireAdmin } from "../middleware/role.ts";
 import { logAudit } from "../lib/audit.ts";
+import { safeError } from "../lib/safe-error.ts";
 
 const ALLOWED_KINDS = new Set(["prompt", "tool", "workflow"]);
 const ALLOWED_SCOPES = new Set(["org", "panel", "user"]);
@@ -374,11 +375,7 @@ packsRouter.post("/:id/import", requireAdmin, async (c) => {
       return c.json({ error: "unknown source" }, 400);
     }
   } catch (err) {
-    console.warn("skill pack import failed:", (err as Error).message);
-    return c.json(
-      { error: "import_failed", detail: (err as Error).message },
-      500,
-    );
+    return safeError(c, err, { status: 500, code: "import_failed", publicMessage: "Skill pack import failed" });
   }
 
   await sql`UPDATE skill_packs SET updated_at = now() WHERE id = ${id}::uuid`;

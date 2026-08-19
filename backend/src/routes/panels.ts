@@ -18,6 +18,7 @@ import { Hono } from "hono";
 import { sql } from "../db/client.ts";
 import { requireAuth } from "../middleware/auth.ts";
 import { requireAdmin } from "../middleware/role.ts";
+import { parsePagination, paginatedResponse } from "../lib/pagination.ts";
 import { logAudit } from "../lib/audit.ts";
 import { getPresence } from "../lib/presence.ts";
 import { summarizePanel } from "../lib/summarize.ts";
@@ -34,6 +35,7 @@ router.use("*", requireAuth);
 router.get("/", async (c) => {
   const user = c.get("user");
   const isAdmin = user.role === "admin";
+  const page = parsePagination(c, { defaultLimit: 50, maxLimit: 200 });
   const rows = await sql<{
     id: string;
     name: string;
@@ -51,6 +53,7 @@ router.get("/", async (c) => {
       ? sql``
       : sql`WHERE EXISTS (SELECT 1 FROM panel_members WHERE panel_id = p.id AND user_id = ${user.id}::uuid)`}
     ORDER BY p.created_at DESC
+    LIMIT ${page.limit} OFFSET ${page.offset}
   `;
   return c.json(rows);
 });
@@ -168,8 +171,20 @@ router.delete("/:id", requireAdmin, async (c) => {
 
 router.get("/:id/members", async (c) => {
   const id = c.req.param("id");
-  // Confirm the panel exists; otherwise return 404 like the rest
-  // of the panel-scoped routes.
+  const user = c.get("user");
+  // Membership-gate: a user must be a member of the panel (or admin)
+  // to see who else is in it. Without this every authenticated user
+  // could enumerate members of any panel just by guessing UUIDs.
+  const member = await sql<{ exists: number }[]>`
+    SELECT EXISTS (
+      SELECT 1 FROM panel_members
+      WHERE panel_id = ${id}::uuid AND user_id = ${user.id}::uuid
+    )::int AS exists
+  `;
+  const isAdmin = user.role === "admin";
+  if (!isAdmin && (member[0]?.exists ?? 0) === 0) {
+    return c.json({ error: "not_found" }, 404);
+  }
   const exists = await sql<{ id: string }[]>`
     SELECT id FROM panels WHERE id = ${id}::uuid LIMIT 1
   `;

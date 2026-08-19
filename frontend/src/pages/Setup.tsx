@@ -15,6 +15,7 @@ import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { CallSign } from "../components/ui/CallSign";
 import { Badge } from "../components/ui/Badge";
+import { Skeleton } from "../components/ui/feedback/Skeleton";
 import {
   CheckIcon,
   ArrowRightIcon,
@@ -267,7 +268,16 @@ export function SetupPage() {
         </div>
 
         {/* Steps */}
-        <div className="mt-6 border border-border bg-panel p-6">
+        <div className="mt-6 border border-border bg-panel p-6" aria-busy={status === null ? "true" : undefined}>
+          {status === null ? (
+            <div className="space-y-3" aria-hidden="true">
+              <Skeleton variant="block" height={28} width="60%" />
+              <Skeleton variant="text" width="80%" />
+              <Skeleton variant="block" height={120} />
+              <Skeleton variant="block" height={120} />
+            </div>
+          ) : (
+            <>
           {step === 0 ? (
             <Step0Welcome />
           ) : step === 1 ? (
@@ -325,11 +335,13 @@ export function SetupPage() {
                 disabled={submitting}
                 className="ml-auto"
               >
-                {submitting ? "Setting up…" : "Finish setup"}
+                  {submitting ? "Setting up…" : "Finish setup"}
                 <CheckIcon size={12} />
               </Button>
             )}
           </div>
+            </>
+          )}
         </div>
 
         {/* Footer hint */}
@@ -545,14 +557,10 @@ function Step2Provider({
               {testState === "testing" ? "Testing…" : "Test connection"}
             </Button>
             {testState === "ok" && (
-              <span className="mono-caps text-[10px] text-teal tracking-wider">
-                reachable
-              </span>
+              <Badge tone="teal">reachable</Badge>
             )}
             {testState === "fail" && (
-              <span className="mono-caps text-[10px] text-rust tracking-wider">
-                unreachable — check the URL
-              </span>
+              <Badge tone="rust">unreachable — check the URL</Badge>
             )}
           </div>
         </>

@@ -29,6 +29,7 @@ import { sql } from "../db/client.ts";
 import { requireAuth } from "../middleware/auth.ts";
 import { logAudit } from "../lib/audit.ts";
 import { validate, validationErrorResponse } from "../lib/validate.ts";
+import { safeError } from "../lib/safe-error.ts";
 
 const router = new Hono();
 router.use("*", requireAuth);
@@ -40,14 +41,21 @@ router.use("*", requireAuth);
 // were created against those messages.
 
 router.get("/kg/:entity/citations", async (c) => {
+  const user = c.get("user");
   const entity = decodeURIComponent(c.req.param("entity") ?? "").trim();
   if (!entity) return c.json({ error: "entity required" }, 400);
+  if (entity.length > 200) {
+    return c.json({ error: "entity_too_long" }, 400);
+  }
   // Cap how many citations we return per entity so a high-traffic node
   // can't slow the UI down.
   const limit = Math.min(Number(c.req.query("limit") ?? "20") || 20, 50);
   try {
-    // Two-step: find messages that mention the entity, then pull
-    // citations + excerpts.
+    // Two-step: find messages that mention the entity AND that the
+    // caller is allowed to see (own 1:1 messages + member of any
+    // panel the message was posted in). Without these filters a user
+    // can probe the contents of every other user's chat just by
+    // guessing an entity name (CRITICAL cross-user data leak).
     const rows = await sql<{
       id: string;
       message_id: string;
@@ -62,6 +70,11 @@ router.get("/kg/:entity/citations", async (c) => {
         SELECT id, panel_id, substring(content FROM 1 FOR 240) AS msg_excerpt
         FROM messages
         WHERE content ILIKE ${'%' + entity + '%'}
+          AND (
+            user_id = ${user.id}::uuid
+            OR (panel_id IS NOT NULL
+                AND panel_id IN (SELECT panel_id FROM panel_members WHERE user_id = ${user.id}::uuid))
+          )
         ORDER BY created_at DESC
         LIMIT ${limit * 4}
       )
@@ -89,11 +102,12 @@ router.get("/kg/:entity/citations", async (c) => {
     });
   } catch (err) {
     // Table may not exist on a fresh DB — return empty.
+    console.warn("[combo] kg citations unavailable:", (err as Error).message);
     return c.json({
       entity,
       count: 0,
       citations: [],
-      detail: `unavailable: ${(err as Error).message}`,
+      detail: "unavailable",
     });
   }
 });
@@ -264,11 +278,12 @@ router.get("/spend-caps", async (c) => {
       last_hour_user_spend_cents: Math.round(Number(last[0]?.total ?? 0) * 100),
     });
   } catch (err) {
+    console.warn("[combo] spend-caps unavailable:", (err as Error).message);
     return c.json({
       panels: [],
       caps_with_warning: 0,
       last_hour_user_spend_cents: 0,
-      detail: `spend_caps table not available: ${(err as Error).message}`,
+      detail: "spend_caps_unavailable",
     });
   }
 });
@@ -400,7 +415,8 @@ router.post("/feedback", async (c) => {
         SET rating = EXCLUDED.rating, reason = EXCLUDED.reason
     `;
   } catch (err) {
-    return c.json({ error: `feedback_failed: ${(err as Error).message}` }, 500);
+    console.warn("[combo] feedback insert failed:", (err as Error).message);
+    return safeError(c, err, { status: 500, code: "feedback_failed", publicMessage: "Failed to record feedback" });
   }
   let rerun: { passed: boolean; checks: unknown[] } | null = null;
   if (body.rating === "down") {
@@ -486,10 +502,11 @@ router.get("/presence", async (c) => {
       })),
     });
   } catch (err) {
+    console.warn("[combo] presence unavailable:", (err as Error).message);
     return c.json({
       panel_id: panelId,
       members: [],
-      detail: `presence unavailable: ${(err as Error).message}`,
+      detail: "presence_unavailable",
     });
   }
 });

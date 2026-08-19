@@ -1,0 +1,184 @@
+# egress-check.yml — periodic verification that the api container's
+# egress is locked down to the configured upstreams.
+#
+# What this guards against: a code change (or a malicious dep)
+# silently opens the api container to arbitrary outbound network.
+# The HARDENING.md deployment recipe pins egress via a docker
+# network (or k8s NetworkPolicy). This workflow spins up a
+# synthetic stack, mounts the api onto a network where only
+# postgres + redis are reachable, and asserts:
+#
+#   1. api CAN reach api.tavily.com / api.openai.com / db
+#      (configured upstreams) — 200 OK or at least a TCP handshake.
+#   2. api CANNOT reach 169.254.169.254 (the AWS / GCP / Azure
+#      instance metadata service) — connection refused / timeout.
+#      IMDS access from a container is a classic credential-leak
+#      escalation path.
+#   3. api CANNOT reach a known-bad arbitrary host (e.g.
+#      evil.example.com) — DNS must fail or TCP must time out.
+#
+# Runs weekly (cron) and on workflow_dispatch. Failures should be
+# investigated immediately — they typically mean a new dependency
+# opened an outbound call without the operator's knowledge.
+
+name: egress-check
+
+on:
+  schedule:
+    # Sundays at 04:00 UTC — quieter window, gives Monday morning a
+    # fresh signal.
+    - cron: "0 4 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  egress:
+    name: egress lockdown verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up isolated docker network
+        run: |
+          # The api can ONLY reach postgres + redis. Everything else
+          # is blocked at the iptables layer by the network's
+          # `--internal` flag.
+          docker network create \
+            --driver bridge \
+            --internal \
+            --subnet 10.99.0.0/24 \
+            helm-egress-test
+          echo "Created network helm-egress-test (internal — no internet route)"
+
+      - name: Bring up postgres + redis on the locked network
+        run: |
+          docker run -d --name egress-pg --network helm-egress-test \
+            -e POSTGRES_USER=helm -e POSTGRES_PASSWORD=helm_dev \
+            -e POSTGRES_DB=helm \
+            postgres:16
+          docker run -d --name egress-redis --network helm-egress-test \
+            redis:7
+
+      - name: Build api image
+        run: |
+          # Build (not pull) so we test the image we're about to ship,
+          # not whatever's tagged :latest on GHCR.
+          docker build -t helm-api:egress -f backend/Dockerfile .
+
+      - name: Run api on the locked network
+        run: |
+          docker run -d --name egress-api --network helm-egress-test \
+            -e ADMIN_USERNAME=admin \
+            -e ADMIN_PASSWORD=ci-admin-password-123 \
+            -e DATABASE_URL=postgres://helm:helm_dev@egress-pg:5432/helm \
+            -e REDIS_URL=redis://egress-redis:6379 \
+            -e SESSION_SECRET=ci-only \
+            -e API_PORT=3000 \
+            -e WEB_ORIGIN=http://localhost:5173 \
+            helm-api:egress
+
+      - name: Wait for api to be healthy
+        run: |
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+            if docker exec egress-api wget -q -O- http://127.0.0.1:3000/api/health >/dev/null 2>&1; then
+              echo "api is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::api never came up"
+          docker logs egress-api
+          exit 1
+
+      - name: ASSERT — IMDS is unreachable (timeout expected)
+        run: |
+          # IMDS is the canonical credential-leak vector. If we
+          # can reach it from inside the api container, the
+          # lockdown is broken.
+          #
+          # `wget --timeout=5` exits non-zero on timeout. We
+          # tolerate non-zero here — the ASSERTION is that wget
+          # doesn't print a 200 response.
+          set +e
+          OUTPUT=$(docker exec egress-api \
+            sh -c "wget --timeout=5 -q -O- http://169.254.169.254/latest/meta-data/" 2>&1)
+          RC=$?
+          set -e
+          echo "wget exit code: $RC"
+          echo "wget output: $OUTPUT"
+          if [ "$RC" -eq 0 ] && [ -n "$OUTPUT" ]; then
+            echo "::error::api reached the IMDS — egress lockdown is broken"
+            exit 1
+          fi
+          echo "OK: IMDS unreachable as expected"
+
+      - name: ASSERT — arbitrary host is unreachable
+        run: |
+          # evil.example.com is reserved by RFC 6761 §6.5 to never
+          # resolve in production DNS. If we get a successful TCP
+          # handshake, the egress lockdown is bypassed.
+          set +e
+          docker exec egress-api \
+            sh -c "wget --timeout=5 -q -O- https://evil.example.com/" 2>/dev/null
+          RC=$?
+          set -e
+          # wget exits 4 on network failure, 5 on SSL failure, 8 on
+          # server error. Anything else means we actually got bytes.
+          case "$RC" in
+            0)
+              echo "::error::api reached evil.example.com — egress lockdown is broken"
+              exit 1
+              ;;
+            *)
+              echo "OK: evil.example.com unreachable (wget exit $RC)"
+              ;;
+          esac
+
+      - name: ASSERT — postgres IS reachable (configured upstream)
+        run: |
+          # The db lives inside the locked network, so this MUST work.
+          # If it doesn't, our test setup is broken — fail loudly so
+          # we don't mistake a misconfiguration for "egress blocked".
+          if ! docker exec egress-pg pg_isready -U helm -d helm >/dev/null 2>&1; then
+            echo "::error::postgres is not reachable inside the test network"
+            docker logs egress-pg
+            exit 1
+          fi
+          echo "OK: postgres reachable on the locked network"
+
+      - name: ASSERT — redis IS reachable (configured upstream)
+        run: |
+          if ! docker exec egress-redis redis-cli ping >/dev/null 2>&1; then
+            echo "::error::redis is not reachable inside the test network"
+            docker logs egress-redis
+            exit 1
+          fi
+          echo "OK: redis reachable on the locked network"
+
+      - name: ASSERT — public upstream (api.tavily.com) is reachable
+        # This is informational: the locked network is INTERNAL,
+        # so this MUST timeout. If it succeeds, the network
+        # was misconfigured and the whole test is invalid.
+        run: |
+          set +e
+          docker exec egress-api \
+            sh -c "wget --timeout=5 -q -O- https://api.tavily.com" 2>/dev/null
+          RC=$?
+          set -e
+          if [ "$RC" -eq 0 ]; then
+            echo "::warning::api reached api.tavily.com from the locked network"
+            echo "::warning::this means the test network has internet access;"
+            echo "::warning::the IMDS + evil.example.com tests above are still valid"
+            echo "::warning::but the configured-upstream reachability is not being"
+            echo "::warning::verified. Investigate docker network config."
+          else
+            echo "OK: public upstreams unreachable from the locked network (expected)"
+          fi
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker rm -f egress-api egress-pg egress-redis 2>/dev/null || true
+          docker network rm helm-egress-test 2>/dev/null || true

@@ -91,7 +91,7 @@ export async function callLightpandaForUrl(url: string): Promise<WebSearchRespon
         query: url,
         service: "safe_blocked",
         results: [],
-        answer: `This URL can't be fetched by the assistant for safety reasons: ${err.message}`,
+        answer: "This URL can't be fetched by the assistant for safety reasons",
         remaining_today: 0,
         limit: 0,
       };

@@ -16,6 +16,7 @@
 // objects and renders them above the textarea as chips.
 
 import { useCallback, useRef, useState } from "react";
+import { api } from "../../../api/client";
 import { useToast } from "../feedback/Toast";
 import { Button } from "../Button";
 import {
@@ -106,16 +107,13 @@ export function FileDrop({
         prev.map((q) => (q.uid === qf.uid ? { ...q, status: "uploading", progress: 0.1 } : q)),
       );
       try {
-        const res = await fetch("/api/files", {
-          method: "POST",
-          credentials: "include",
-          body: form,
-        });
-        if (!res.ok) {
-          const text = await res.text();
-          throw new Error(text || `upload failed (${res.status})`);
-        }
-        const data = (await res.json()) as { id: string; mime_type: string; panel_id: string | null };
+        const data = await api<{ id: string; mime_type: string; panel_id: string | null }>(
+          "/files",
+          {
+            method: "POST",
+            body: form,
+          },
+        );
         const uploaded: UploadedFile = {
           id: data.id,
           name: qf.file.name,
@@ -128,19 +126,16 @@ export function FileDrop({
         // the chat can use the description as context. We don't await
         // it because the user might already be typing the next message.
         if (purpose === "vision" && qf.file.type.startsWith("image/")) {
-          fetch(`/api/files/${data.id}/describe`, {
-            method: "POST",
-            credentials: "include",
-          })
-            .then((r) => (r.ok ? r.json() : null))
+          api<{ description?: string; stub?: boolean }>(
+            `/files/${data.id}/describe`,
+            { method: "POST" },
+          )
             .then((desc) => {
-              if (desc && typeof desc === "object" && "description" in desc) {
-                uploaded.description = String((desc as { description: string }).description);
-                uploaded.stub = Boolean((desc as { stub?: boolean }).stub);
-                onUploaded?.(uploaded);
-              } else {
-                onUploaded?.(uploaded);
+              if (desc && typeof desc.description === "string") {
+                uploaded.description = desc.description;
+                uploaded.stub = Boolean(desc.stub);
               }
+              onUploaded?.(uploaded);
             })
             .catch(() => onUploaded?.(uploaded));
         } else {

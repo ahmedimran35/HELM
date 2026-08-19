@@ -6,6 +6,7 @@ import { apiGet, apiPost } from "../api/client";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { CallSign } from "../components/ui/CallSign";
+import { Input } from "../components/ui/Input";
 import { safeHref } from "../lib/safe-href";
 
 interface WebSearchResult {
@@ -107,7 +108,7 @@ export function WebSearchPage() {
 
       <div className="border border-border bg-panel p-4">
         <div className="flex items-end gap-2">
-          <input
+          <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
@@ -117,7 +118,7 @@ export function WebSearchPage() {
               }
             }}
             placeholder="What do you want to find out?"
-            className="flex-1 h-10 bg-panelAlt border border-border text-text px-3 font-mono text-[14px] focus:border-brass"
+            className="flex-1 h-10"
           />
           <Button
             variant="primary"
@@ -170,7 +171,7 @@ export function WebSearchPage() {
                   className="px-4 py-3 border-b border-borderSoft last:border-b-0"
                 >
                   <div className="flex items-baseline gap-2 mb-1">
-                    <span className="mono-caps text-[10px] text-brass">[{i + 1}]</span>
+                    <Badge tone="brass">[{i + 1}]</Badge>
                     <a
                       href={safeHref(r.url)}
                       target="_blank"

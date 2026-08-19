@@ -14,6 +14,7 @@ import { EmptyState } from "../components/ui/feedback/EmptyState";
 import { Skeleton, SkeletonTable } from "../components/ui/feedback/Skeleton";
 import { StatusPill } from "../components/ui/feedback/StatusPill";
 import { Button } from "../components/ui/Button";
+import { Input } from "../components/ui/Input";
 import { useToast } from "../components/ui/feedback/Toast";
 import {
   WalletIcon,
@@ -217,22 +218,22 @@ function SpendCapCard({
         {editing ? (
           <div className="space-y-2 pt-2 border-t border-borderSoft">
             <FieldRow label="limit (cents)">
-              <input
+              <Input
                 type="number"
                 min={1}
                 value={limitCents}
                 onChange={(e) => setLimitCents(Math.max(1, Number(e.target.value) || 0))}
-                className="w-full bg-panelAlt border border-border text-text px-2 py-1 font-mono text-[12px]"
+                className="w-full py-1"
               />
             </FieldRow>
             <FieldRow label="warn at %">
-              <input
+              <Input
                 type="number"
                 min={1}
                 max={100}
                 value={warnAtPct}
                 onChange={(e) => setWarnAtPct(Math.max(1, Math.min(100, Number(e.target.value) || 80)))}
-                className="w-full bg-panelAlt border border-border text-text px-2 py-1 font-mono text-[12px]"
+                className="w-full py-1"
               />
             </FieldRow>
             <FieldRow label="hard cap">

@@ -5,7 +5,7 @@
 
 import { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
-import { apiGet, apiPost, apiDelete } from "../api/client";
+import { api, apiGet, apiPost, apiDelete } from "../api/client";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
@@ -254,14 +254,13 @@ function FilesTab() {
       const fd = new FormData();
       fd.append("file", file);
       fd.append("name", displayName);
-      const res = await fetch("/api/workspace/files", {
-        method: "POST",
-        credentials: "include",
-        body: fd,
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        alert(`upload failed: ${body.error ?? res.status}`);
+      try {
+        await api("/workspace/files", {
+          method: "POST",
+          body: fd,
+        });
+      } catch (err) {
+        alert(`upload failed: ${(err as Error).message}`);
       }
       reload();
     } finally {

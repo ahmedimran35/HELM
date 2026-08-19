@@ -22,6 +22,57 @@
 // Every exec is audit-logged (`sandbox_exec`) with the cmd, exit code,
 // duration, and per-session counter. Errors from the API layer (bad
 // request, not found, forbidden) are surfaced with structured JSON.
+//
+// ============================================================================
+// Isolation primitives — current state and future plan
+// ============================================================================
+//   primitive                status (default / SANDBOX_USE_UNSHARE=1)
+//   ----------------------   ----------------------------------------
+//   chroot / pivot_root      NOT IMPLEMENTED. Required for true FS jail.
+//                            Plan: switch exec backend from Bun.spawn
+//                            to a side-car helper that does
+//                            `unshare --user --mount --map-root-user`
+//                            and `chroot <sandbox-dir>`.
+//   seccomp / syscall filter NOT IMPLEMENTED. Plan: ship a JSON seccomp
+//                            profile denying ptrace, setuid, kexec,
+//                            module-load, raw sockets; load via
+//                            `unshare` + `--seccomp` once we move off
+//                            Bun.spawn (Bun does not expose prctl).
+//   network namespace        OPTIONAL via SANDBOX_USE_UNSHARE=1. When
+//                            set, exec is wrapped in
+//                            `unshare --net --user --map-root-user
+//                            --mount-proc --pid --fork` which gives
+//                            the child its own netns (no external
+//                            connectivity by default).
+//   resource limits          PARTIAL. Timeout enforced via setTimeout +
+//                            proc.kill. Memory cap is hinted via
+//                            HELM_SANDBOX_MEM_BUDGET_MB env but not
+//                            enforced (Bun.spawn lacks portable rlimit
+//                            knob). Plan: when exec moves into a
+//                            side-car, set RLIMIT_AS/RLIMIT_CPU via
+//                            prlimit before exec.
+//   capability drop          NOT IMPLEMENTED. Plan: when we ship
+//                            Firecracker microVMs for multi-tenant
+//                            exec, the side-car runs as a non-root
+//                            container with no_new_privs + cap_drop
+//                            ALL, and each user gets its own VM.
+//   apparmor / selinux       NOT IMPLEMENTED. Plan: ship an apparmor
+//                            profile denying writes outside the
+//                            user sandbox dir.
+//   landlock                 NOT IMPLEMENTED. Plan: load a ruleset
+//                            that pins FS access to <repo>/tmp/sandbox
+//                            once Bun (or our side-car) supports it.
+//
+// Today the exec path is: `bash -c <cmd>` with PATH-stripped env and
+// cwd pinned to the per-user sandbox dir. That is "basic" isolation.
+//
+// When SANDBOX_USE_UNSHARE=1 the path is upgraded to
+//   `unshare --user --map-root-user --net --mount-proc --pid --fork
+//    bash -c <cmd>`
+// giving the child its own user + net + pid namespaces, and the API
+// response reports `isolation: "unshare"`. Operators verify the mode
+// from the per-exec response or the boot-time log line.
+// ============================================================================
 
 import { Hono } from "hono";
 import { join, resolve, sep } from "node:path";
@@ -35,6 +86,24 @@ import { validate, validationErrorResponse } from "../lib/validate.ts";
 
 const router = new Hono();
 router.use("*", requireAuth);
+
+// Feature flag: when SANDBOX_USE_UNSHARE=1, wrap exec in `unshare --user
+// --map-root-user --net --mount-proc --pid --fork` to give the child
+// its own user + network + pid namespaces. Default off so macOS dev
+// hosts (which lack unshare(1)) keep working — the kernel-mode primitives
+// we want are Linux-only.
+const USE_UNSHARE = process.env.SANDBOX_USE_UNSHARE === "1";
+const ISOLATION_MODE: "basic" | "unshare" = USE_UNSHARE ? "unshare" : "basic";
+// One-time boot-time log so operators can confirm which isolation path
+// is active without poking at every exec response.
+{
+  // eslint-disable-next-line no-console
+  console.log(
+    USE_UNSHARE
+      ? "[sandbox] isolation mode: unshare + net-ns"
+      : "[sandbox] isolation mode: bash + env-strip",
+  );
+}
 
 // Repo root = one above `src/`. We anchor all sandbox paths under
 // `<repo>/tmp/sandbox/{user_id}/` so cleanup is "rm -rf tmp/sandbox"
@@ -282,13 +351,37 @@ router.post("/sessions/:id/exec", async (c) => {
   await ensureDir(cwd);
 
   const startedAt = Date.now();
+  // Pick the spawn command based on the SANDBOX_USE_UNSHARE flag.
+  // Default: `bash -c <cmd>` (basic isolation).
+  // With flag: `unshare --user --map-root-user --net --mount-proc --pid
+  //   --fork bash -c <cmd>` — gives the child its own user, network,
+  //   and pid namespaces. The netns means no external connectivity by
+  //   default; only loopback is reachable inside the new namespace.
+  const execCmd = USE_UNSHARE
+    ? [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--net",
+        "--mount-proc",
+        "--pid",
+        "--fork",
+        "bash",
+        "-c",
+        body.cmd,
+      ]
+    : [
+        // -c (not -lc): skips login profile scripts like /etc/profile and
+        // ~/.bash_profile. Login shells read those on startup, and a hostile
+        // admin who can drop a file into the sandbox cwd can use them to
+        // persist code into every command the user runs. Non-login is the
+        // right default for a sandboxed shell.
+        "bash",
+        "-c",
+        body.cmd,
+      ];
   const proc = Bun.spawn({
-    // -c (not -lc): skips login profile scripts like /etc/profile and
-    // ~/.bash_profile. Login shells read those on startup, and a hostile
-    // admin who can drop a file into the sandbox cwd can use them to
-    // persist code into every command the user runs. Non-login is the
-    // right default for a sandboxed shell.
-    cmd: ["bash", "-c", body.cmd],
+    cmd: execCmd,
     cwd,
     env: {
       // Restricted env: PATH only (no leaked secrets), HOME pinned to
@@ -408,6 +501,10 @@ router.post("/sessions/:id/exec", async (c) => {
     duration_ms: durationMs,
     timed_out: timedOut,
     session_id: id,
+    // Surface which isolation primitive ran this command so operators
+    // can verify the SANDBOX_USE_UNSHARE flag actually took effect.
+    // `basic` = bash -c with env-strip; `unshare` = unshare + netns.
+    isolation: ISOLATION_MODE,
   });
 });
 

@@ -16,6 +16,7 @@
 
 import { useState } from "react";
 import { ChevronDownIcon } from "../Icon";
+import { Badge } from "../Badge";
 import { cn } from "../../../lib/cn";
 import { safeHref } from "../../../lib/safe-href";
 
@@ -72,9 +73,7 @@ export function CitationCard({
             !expanded && "-rotate-90",
           )}
         />
-        <span className="mono-caps text-[10px] text-brass tracking-wider">
-          Sources
-        </span>
+        <Badge tone="brass">Sources</Badge>
         <span className="mono-caps text-[10px] text-textMuted tracking-wider">
           {citations.length}
         </span>

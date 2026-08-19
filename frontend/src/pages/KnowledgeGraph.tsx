@@ -21,6 +21,7 @@ import { apiGet, apiPost } from "../api/client";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { EmptyState } from "../components/ui/feedback/EmptyState";
+import { Skeleton } from "../components/ui/feedback/Skeleton";
 import { useToast } from "../components/ui/feedback/Toast";
 import { SideSheet } from "../components/ui/layout/SideSheet";
 import { cn } from "../lib/cn";
@@ -70,8 +71,8 @@ const KIND_ORDER: EntityKind[] = ["all", "person", "project", "topic", "file", "
 
 export function KnowledgeGraphPage() {
   const { addToast } = useToast();
-  const [nodes, setNodes] = useState<KGNode[]>([]);
-  const [edges, setEdges] = useState<KGEdge[]>([]);
+  const [nodes, setNodes] = useState<KGNode[] | null>(null);
+  const [edges, setEdges] = useState<KGEdge[] | null>(null);
   const [kindFilter, setKindFilter] = useState<EntityKind>("all");
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
   const [extractOpen, setExtractOpen] = useState(false);
@@ -100,13 +101,20 @@ export function KnowledgeGraphPage() {
     };
   }, []);
 
+  // Until the first fetch settles, render a placeholder shape so the
+  // canvas doesn't pop in empty. Defaults keep the rest of the page
+  // (sidebar / counts) untouched.
+  const viewNodes = nodes ?? [];
+  const viewEdges = edges ?? [];
+  const isLoading = nodes === null || edges === null;
+
   // Resolved graph — filtered nodes + the edges that stay when both
   // endpoints remain after the kind filter.
   const view = useMemo(() => {
     const allowed = new Set<string>(
-      nodes.filter((n) => kindFilter === "all" || n.kind === kindFilter).map((n) => n.id),
+      viewNodes.filter((n) => kindFilter === "all" || n.kind === kindFilter).map((n) => n.id),
     );
-    const filtEdges = edges.filter(
+    const filtEdges = viewEdges.filter(
       (e) => allowed.has(e.from_entity_id) && allowed.has(e.to_entity_id),
     );
     const degreeMap = new Map<string, number>();
@@ -115,11 +123,11 @@ export function KnowledgeGraphPage() {
       degreeMap.set(e.to_entity_id, (degreeMap.get(e.to_entity_id) ?? 0) + 1);
     }
     return {
-      nodes: nodes.filter((n) => allowed.has(n.id)),
+      nodes: viewNodes.filter((n) => allowed.has(n.id)),
       edges: filtEdges,
       degreeMap,
     };
-  }, [nodes, edges, kindFilter]);
+  }, [viewNodes, viewEdges, kindFilter]);
 
   // Position state lives in a ref so the physics tick mutates it
   // without triggering a React render. We seed nodes on a circle to
@@ -325,10 +333,10 @@ export function KnowledgeGraphPage() {
   }
 
   const counts = useMemo(() => {
-    const c: Record<string, number> = { all: nodes.length };
-    for (const n of nodes) c[n.kind] = (c[n.kind] ?? 0) + 1;
+    const c: Record<string, number> = { all: nodes?.length ?? 0 };
+    for (const n of viewNodes) c[n.kind] = (c[n.kind] ?? 0) + 1;
     return c;
-  }, [nodes]);
+  }, [viewNodes, nodes?.length]);
 
   return (
     <div className="p-6 md:p-8 max-w-[1400px] mx-auto">
@@ -399,7 +407,14 @@ export function KnowledgeGraphPage() {
 
         {/* Canvas */}
         <div className="bg-panel border border-border h-[520px] relative overflow-hidden">
-          {view.nodes.length === 0 ? (
+          {isLoading ? (
+            <div className="h-full p-6 space-y-3" aria-busy="true">
+              <Skeleton variant="text" width="40%" />
+              <Skeleton variant="block" height={120} />
+              <Skeleton variant="block" height={120} />
+              <Skeleton variant="block" height={120} />
+            </div>
+          ) : view.nodes.length === 0 ? (
             <div className="h-full flex items-center justify-center">
               <EmptyState
                 title="No entities yet"
@@ -532,8 +547,9 @@ export function KnowledgeGraphPage() {
   );
 }
 
-function activeNodeName(nodes: KGNode[], id: string | null): string {
+function activeNodeName(nodes: KGNode[] | null, id: string | null): string {
   if (!id) return "Node";
+  if (!nodes) return "Node";
   const n = nodes.find((x) => x.id === id);
   return n?.name ?? "Unknown node";
 }

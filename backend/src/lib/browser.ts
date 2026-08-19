@@ -23,7 +23,7 @@
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 
 // Cached playwright module + browser. We only ever spin up one
 // chromium instance (the user's "agent browser") and reuse it across
@@ -110,7 +110,53 @@ export interface BrowserExecOutput {
   reason?: string;
 }
 
-const SCREENSHOTS_DIR = join(process.cwd(), "tmp", "browser");
+const SCREENSHOTS_DIR = resolve(process.cwd(), "tmp", "browser");
+
+// Sanity-check the SCREENSHOTS_DIR constant once at module load so a
+// misconfigured `process.cwd()` (e.g. /tmp) can't trick containsPath()
+// into trusting a wider tree.
+if (!SCREENSHOTS_DIR || SCREENSHOTS_DIR === sep) {
+  throw new Error("SCREENSHOTS_DIR resolved to filesystem root — refusing to start");
+}
+
+/** Strict path-traversal guard. Throws when the resolved path is
+ *  outside the allowed root. Rejects:
+ *   - `..` segments at any depth
+ *   - null bytes
+ *   - absolute paths
+ *   - symlinks that resolve outside the root (we re-resolve before
+ *     returning; this is best-effort under bun without fs.realpath
+ *     guarantees — the regex filter is the primary defence) */
+function safeJoin(root: string, ...parts: string[]): string {
+  for (const p of parts) {
+    if (typeof p !== "string" || p.length === 0) {
+      throw new Error("path component must be a non-empty string");
+    }
+    // Null byte injection (POSIX truncates at NUL).
+    if (p.includes("\0")) throw new Error("path component contains null byte");
+    // Reject absolute paths and parent-segment navigation.
+    if (p.startsWith("/") || p.startsWith("\\")) throw new Error("absolute path rejected");
+    if (p === ".." || p === ".") throw new Error("path traversal rejected");
+    if (p.split(/[\\/]+/).includes("..")) throw new Error("path traversal rejected");
+  }
+  const resolved = resolve(root, ...parts);
+  const rootWithSep = root.endsWith(sep) ? root : root + sep;
+  // Containment check — the resolved path must be exactly `root` or
+  // strictly inside it.
+  if (resolved !== root && !resolved.startsWith(rootWithSep)) {
+    throw new Error("path escapes screenshots root");
+  }
+  return resolved;
+}
+
+/** Lighter-weight check for read paths where the caller already
+ *  validated the segments. We still verify containment because the
+ *  filename regex can be defeated by unicode lookalikes. */
+function containsPath(root: string, candidate: string): boolean {
+  const resolved = resolve(candidate);
+  const rootWithSep = root.endsWith(sep) ? root : root + sep;
+  return resolved === root || resolved.startsWith(rootWithSep);
+}
 
 export async function runBrowser(input: BrowserExecInput): Promise<BrowserExecOutput> {
   const start = Date.now();
@@ -127,7 +173,7 @@ export async function runBrowser(input: BrowserExecInput): Promise<BrowserExecOu
       screenshot: null,
       duration_ms: Date.now() - start,
       stub: true,
-      reason: (err as Error).message,
+      reason: "browser_unavailable",
     };
   }
   return withMutex(async () => {
@@ -149,9 +195,13 @@ export async function runBrowser(input: BrowserExecInput): Promise<BrowserExecOu
       finalUrl = page.url();
       title = await page.title();
       // Always end with a screenshot so the UI has something to show.
-      await mkdir(join(SCREENSHOTS_DIR, input.scope), { recursive: true });
+      // Path-traversal guard — input.scope is user-controlled (e.g.
+      // the panel_id or user_id), so we resolve it against the
+      // screenshots root and refuse anything that escapes.
+      const scopeDir = safeJoin(SCREENSHOTS_DIR, input.scope);
+      await mkdir(scopeDir, { recursive: true });
       const ts = Date.now();
-      const screenshotPath = join(SCREENSHOTS_DIR, input.scope, `${ts}.png`);
+      const screenshotPath = safeJoin(SCREENSHOTS_DIR, input.scope, `${ts}.png`);
       await page.screenshot({ path: screenshotPath, fullPage: false });
       return {
         finalUrl,
@@ -161,6 +211,10 @@ export async function runBrowser(input: BrowserExecInput): Promise<BrowserExecOu
         duration_ms: Date.now() - start,
       };
     } catch (err) {
+      // Don't leak raw error.message — the browser stub flows up
+      // through the API to the model context. Log full details
+      // server-side and store a generic marker.
+      console.warn("[browser] action failed:", (err as Error).message);
       return {
         finalUrl,
         title,
@@ -168,7 +222,7 @@ export async function runBrowser(input: BrowserExecInput): Promise<BrowserExecOu
         screenshot: null,
         duration_ms: Date.now() - start,
         stub: true,
-        reason: (err as Error).message,
+        reason: "browser_action_failed",
       };
     } finally {
       await context.close().catch(() => {});
@@ -225,7 +279,17 @@ export async function readScreenshot(
 ): Promise<Uint8Array | null> {
   if (!/^[a-zA-Z0-9_-]+$/.test(scope)) return null;
   if (!/^[a-zA-Z0-9_.-]+$/.test(filename)) return null;
-  const path = join(SCREENSHOTS_DIR, scope, filename);
+  let path: string;
+  try {
+    path = safeJoin(SCREENSHOTS_DIR, scope, filename);
+  } catch {
+    return null;
+  }
+  // Defence in depth — re-verify containment after the join. A
+  // successful safeJoin already guarantees this; the second check
+  // future-proofs against a refactor that swaps the helper for plain
+  // `join`.
+  if (!containsPath(SCREENSHOTS_DIR, path)) return null;
   if (!existsSync(path)) return null;
   // Lazy require to avoid loading node:fs into a non-Node-only env.
   const { readFile } = await import("node:fs/promises");
@@ -239,9 +303,13 @@ export async function saveScreenshot(
   filename: string,
   bytes: Uint8Array,
 ): Promise<string> {
-  const dir = join(SCREENSHOTS_DIR, scope);
+  // Path-traversal guard — scope and filename are caller-supplied.
+  if (!/^[a-zA-Z0-9_-]+$/.test(scope)) throw new Error("invalid scope");
+  if (!/^[a-zA-Z0-9_.-]+$/.test(filename)) throw new Error("invalid filename");
+  const path = safeJoin(SCREENSHOTS_DIR, scope, filename);
+  if (!containsPath(SCREENSHOTS_DIR, path)) throw new Error("path traversal rejected");
+  const dir = resolve(path, "..");
   await mkdir(dir, { recursive: true });
-  const path = join(dir, filename);
   await writeFile(path, bytes);
   return `${scope}/${filename}`;
 }

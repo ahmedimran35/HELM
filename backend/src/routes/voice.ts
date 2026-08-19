@@ -235,8 +235,11 @@ async function transcribe(input: {
     const body = (await res.json()) as { text?: string };
     return { text: body.text ?? "", stub: false };
   } catch (err) {
+    // Don't leak the underlying error message into the transcript — that
+    // field is returned to the client and persisted in the DB.
+    console.warn("[voice] whisper failed:", (err as Error).message);
     return {
-      text: `[whisper failed: ${(err as Error).message}]`,
+      text: "[whisper failed: transcription error]",
       stub: true,
     };
   }

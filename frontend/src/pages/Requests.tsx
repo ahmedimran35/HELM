@@ -5,6 +5,7 @@ import { apiGet, apiPost } from "../api/client";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { CallSign } from "../components/ui/CallSign";
+import { Skeleton } from "../components/ui/feedback/Skeleton";
 
 interface AccessRequest {
   id: string;
@@ -20,7 +21,7 @@ interface AccessRequest {
 }
 
 export function RequestsPage() {
-  const [rows, setRows] = useState<AccessRequest[]>([]);
+  const [rows, setRows] = useState<AccessRequest[] | null>(null);
   const reload = () => apiGet<AccessRequest[]>("/access-requests").then(setRows);
   useEffect(() => {
     reload();
@@ -29,6 +30,32 @@ export function RequestsPage() {
   async function decide(id: string, decision: "approve" | "deny") {
     await apiPost(`/access-requests/${id}/decide`, { decision });
     reload();
+  }
+
+  // While the initial fetch is in flight we render placeholder rows so
+  // the page doesn't pop in empty. After it settles we branch on
+  // pending/decided with the normal content.
+  if (rows === null) {
+    return (
+      <div className="p-6 max-w-[900px] space-y-6">
+        <div>
+          <h2 className="font-display text-[20px] font-semibold text-text tracking-wide">
+            Requests
+          </h2>
+          <div className="text-textMuted text-[13px]">
+            Access requests pending your decision.
+          </div>
+        </div>
+        <Panel title="Loading…">
+          <div className="space-y-3" aria-busy="true">
+            <Skeleton variant="row" />
+            <Skeleton variant="row" />
+            <Skeleton variant="row" />
+            <Skeleton variant="row" />
+          </div>
+        </Panel>
+      </div>
+    );
   }
 
   const pending = rows.filter((r) => r.status === "pending");

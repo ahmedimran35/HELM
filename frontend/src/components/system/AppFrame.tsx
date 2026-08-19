@@ -90,12 +90,22 @@ export function AppFrame({ slug, install, appName, bundleUrl, onClose }: AppFram
     return `/apps-embed?${params.toString()}`;
   }, [slug, install, bundleUrl]);
 
-  // Listen for messages from the embedded iframe. We accept messages
-  // from any origin because the iframe's contentWindow.origin is the
-  // same as ours (/apps-embed is served by the same backend); we still
-  // verify the shape so a hostile page can't crash our handler.
+  // Listen for messages from the embedded iframe. Origin must match
+  // the host's origin — anything else (sibling iframe, popup, malicious
+  // page, or window.opener) is rejected. This blocks postMessage-based
+  // UI-spoofing (helm:toast) and route-tampering (helm:navigate) from
+  // non-iframe senders. Path field is also validated to be an internal
+  // SPA route so an attacker who can produce a same-origin message
+  // (XSS in the same window) still can't redirect the user to
+  // javascript:foo or https://evil.example.
   useEffect(() => {
     function onMessage(ev: MessageEvent) {
+      // Strict origin check: must be exactly the host's origin.
+      // source check on top of that — only the iframe's own contentWindow.
+      if (ev.origin !== window.location.origin) return;
+      const w = iframeRef.current?.contentWindow;
+      if (ev.source !== w) return;
+
       const data = ev.data as IframeMessage | null;
       if (!data || typeof data !== "object" || typeof data.type !== "string") {
         return;
@@ -108,15 +118,18 @@ export function AppFrame({ slug, install, appName, bundleUrl, onClose }: AppFram
           // it has fresh theme + install info even if it missed our
           // initial load message (e.g. due to a slow first paint).
           try {
-            const w = iframeRef.current?.contentWindow;
             if (w) {
+              // Use the iframe's exact origin, not "*". The iframe
+              // origin is the same as the host's (we just checked) but
+              // the explicit value is what the spec requires.
+              const iframeOrigin = w.location.origin || window.location.origin;
               w.postMessage(
                 {
                   type: "helm:context",
                   theme: currentThemeRef.current,
                   install: { id: install },
                 },
-                "*",
+                iframeOrigin,
               );
             }
           } catch {
@@ -141,12 +154,17 @@ export function AppFrame({ slug, install, appName, bundleUrl, onClose }: AppFram
           break;
         }
         case "helm:navigate":
-          // The app wants to take the user somewhere else. We can't
-          // know the host's router here — emit an event the page can
-          // listen for. The default action for the page is to call
-          // `window.location.href = path`, but the host can intercept
-          // if it wants soft-navigation instead.
-          if (typeof data.path === "string" && data.path.length > 0) {
+          // The app wants to take the user somewhere else. Validate
+          // that the path is an internal SPA route — reject any
+          // cross-origin or javascript: URL. Then emit an event the
+          // host page can listen for; the default action is to call
+          // window.location.href = path, but the host can intercept.
+          if (
+            typeof data.path === "string" &&
+            data.path.length > 0 &&
+            data.path.length < 256 &&
+            /^\/[A-Za-z0-9_\-/.?&=]*$/.test(data.path)
+          ) {
             window.dispatchEvent(
               new CustomEvent("helm:app-navigate", { detail: { path: data.path, slug } }),
             );
@@ -189,9 +207,15 @@ export function AppFrame({ slug, install, appName, bundleUrl, onClose }: AppFram
         try {
           const w = iframeRef.current?.contentWindow;
           if (w) {
+            // Use the iframe's exact origin, not "*". The iframe origin
+            // matches the host's by construction (we set `src` ourselves)
+            // and the explicit value is what the postMessage spec
+            // requires — "*" would let a swapped iframe forward our
+            // context to an unexpected origin.
+            const iframeOrigin = w.location.origin || window.location.origin;
             w.postMessage(
               { type: "helm:context", theme: next, install: { id: install } },
-              "*",
+              iframeOrigin,
             );
           }
         } catch {
@@ -210,13 +234,19 @@ export function AppFrame({ slug, install, appName, bundleUrl, onClose }: AppFram
     try {
       const w = iframeRef.current?.contentWindow;
       if (w) {
+        // Pin the target origin to the iframe's own origin rather than
+        // "*". The browser will refuse to deliver the message to a
+        // different origin, which prevents the context (theme +
+        // install id) from leaking if the iframe is ever navigated
+        // somewhere hostile.
+        const iframeOrigin = w.location.origin || window.location.origin;
         w.postMessage(
           {
             type: "helm:context",
             theme: currentThemeRef.current,
             install: { id: install },
           },
-          "*",
+          iframeOrigin,
         );
       }
     } catch {

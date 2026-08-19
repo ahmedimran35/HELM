@@ -17,6 +17,7 @@
 //     we surface a clear error toast instead of silently no-op'ing.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { api } from "../../api/client";
 import { useToast } from "../ui/feedback/Toast";
 import { Button } from "../ui/Button";
 import {
@@ -165,21 +166,15 @@ export function VoiceRecorder({ panelId, onTranscript, onClose, open }: Props) {
       if (panelId) form.append("panel_id", panelId);
       form.append("duration_ms", String(state.elapsedMs));
       try {
-        const res = await fetch("/api/voice", {
-          method: "POST",
-          credentials: "include",
-          body: form,
-        });
-        if (!res.ok) {
-          const text = await res.text();
-          throw new Error(text || `upload failed (${res.status})`);
-        }
-        const data = (await res.json()) as {
+        const data = await api<{
           id: string;
           transcript: string;
           duration_ms: number;
           stub: boolean;
-        };
+        }>("/voice", {
+          method: "POST",
+          body: form,
+        });
         setState((s) => ({
           ...s,
           status: "done",

@@ -4,11 +4,16 @@ import { useAuth } from "../auth/AuthContext";
 import { apiPost } from "../api/client";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
+import { Skeleton } from "../components/ui/feedback/Skeleton";
 
 /**
  * Forced change-password gate. Triggered when the user must reset their
  * password (first login, or admin reset). After a successful change we
  * refresh the user via the auth context.
+ *
+ * The page's "data" is the current user from AuthContext. While the
+ * user hasn't been hydrated yet (user === null) we render a brief
+ * skeleton so the form doesn't pop in late.
  */
 export function ChangePasswordPage() {
   const { user, refresh } = useAuth();
@@ -44,6 +49,24 @@ export function ChangePasswordPage() {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-full h-full flex items-center justify-center bg-bg px-4">
+        <div className="w-full max-w-[380px] space-y-4">
+          <Skeleton variant="block" height={28} width="60%" />
+          <Skeleton variant="text" width="80%" />
+          <div className="border border-border bg-panel p-5 space-y-3">
+            <Skeleton variant="text" width="40%" />
+            <Skeleton variant="block" height={36} />
+            <Skeleton variant="block" height={36} />
+            <Skeleton variant="block" height={36} />
+            <Skeleton variant="block" height={36} />
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (

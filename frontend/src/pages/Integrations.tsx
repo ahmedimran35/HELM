@@ -6,6 +6,7 @@ import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { CallSign } from "../components/ui/CallSign";
+import { Skeleton } from "../components/ui/feedback/Skeleton";
 
 interface Integration {
   id: string;
@@ -24,7 +25,7 @@ const ALL_EVENTS = [
 ];
 
 export function IntegrationsPage() {
-  const [list, setList] = useState<Integration[]>([]);
+  const [list, setList] = useState<Integration[] | null>(null);
   const reload = () => apiGet<Integration[]>("/integrations").then(setList);
   useEffect(() => {
     reload();
@@ -41,14 +42,22 @@ export function IntegrationsPage() {
         </div>
       </div>
 
-      {["discord", "telegram", "slack"].map((svc) => (
-        <ServiceBlock
-          key={svc}
-          service={svc as Integration["service"]}
-          existing={list.find((i) => i.service === svc)}
-          onChanged={reload}
-        />
-      ))}
+      {list === null ? (
+        <div className="border border-border bg-panel p-4 space-y-3">
+          <Skeleton variant="text" width="40%" />
+          <Skeleton variant="block" height={36} />
+          <Skeleton variant="block" height={36} />
+        </div>
+      ) : (
+        ["discord", "telegram", "slack"].map((svc) => (
+          <ServiceBlock
+            key={svc}
+            service={svc as Integration["service"]}
+            existing={list.find((i) => i.service === svc)}
+            onChanged={reload}
+          />
+        ))
+      )}
     </div>
   );
 }

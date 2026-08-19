@@ -16,21 +16,25 @@
      them with the standard `<alpha-value>` placeholder. This is what
      lets bg-bg, text-text, border-border, etc. read from the live
      variables at runtime instead of being inlined at build time. */
-  /* Dark surface stack — bg → panelAlt → panel lifted in clearly
-     distinguishable steps so cards/sections pop. */
-  --bg-rgb: 8 10 14;              /* near-black surface */
-  --panel-rgb: 52 60 76;          /* clearly lifted cards (1.79:1 vs bg) */
-  --panelAlt-rgb: 32 38 50;       /* medium sections (1.31:1 vs bg) */
-  --border-rgb: 90 100 116;       /* clearly visible (3.3:1 vs bg) */
-  --borderSoft-rgb: 66 74 88;     /* soft but present (2.2:1 vs bg) */
-  --text-rgb: 237 234 226;
-  --textMuted-rgb: 180 184 196;   /* brighter for dark mode */
-  --textFaint-rgb: 140 145 160;   /* readable in dark */
-  --brass-rgb: 201 162 39;
-  --brassSoft-rgb: 138 114 32;
-  --teal-rgb: 76 156 144;
-  --rust-rgb: 181 83 60;
-  --gridColor: rgba(90, 100, 116, 0.18);
+  /* Dark surface stack — slate default (cool blue-tinted dark). bg
+     rgb(28,32,44) is "soft slate" rather than near-black; panels
+     lift to rgb(54,62,84) for clear ~9:1 panel pop. Borders at
+     rgb(100,114,140) (6:1 vs bg) are clearly visible without
+     feeling heavy. Tuned to avoid the "big black blocks" effect —
+     everything reads as a layered surface, not as low contrast. */
+  --bg-rgb: 28 32 44;             /* soft slate-blue bg */
+  --panel-rgb: 54 62 84;          /* lifted cards — clear pop */
+  --panelAlt-rgb: 40 48 66;       /* medium sections — distinct from panel */
+  --border-rgb: 100 114 140;      /* cool border — 6:1 vs bg */
+  --borderSoft-rgb: 80 94 122;    /* soft but present */
+  --text-rgb: 234 234 242;
+  --textMuted-rgb: 178 186 202;
+  --textFaint-rgb: 138 148 168;
+  --brass-rgb: 220 184 64;        /* slightly brighter brass for dark bg */
+  --brassSoft-rgb: 156 128 38;
+  --teal-rgb: 96 184 168;
+  --rust-rgb: 220 110 86;
+  --gridColor: rgba(100, 114, 140, 0.16);
   --shadowMd: 0 10px 28px rgba(0, 0, 0, 0.65);
   /* The legacy non-RGB vars are kept for hand-written rules in index.css. */
   --bg: rgb(var(--bg-rgb));
@@ -181,6 +185,37 @@ body {
   100% {
     background-position: -100% 0;
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Typing wave                                                                */
+/* -------------------------------------------------------------------------- */
+/* Three dots that pulse with staggered delays so the user sees a wave
+   rather than three dots breathing in unison. The opacity dip (0.3)
+   combined with a small scale drop creates a clear "wave" motion. */
+
+@keyframes typing-wave {
+  0%, 60%, 100% {
+    opacity: 0.25;
+    transform: scale(0.7);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [class*="animate-"] {
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/* Cursor blink for the streaming reply tail. Always-visible during
+   streaming so the user sees the input point. */
+@keyframes cursor-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
 }
 
 /* Reduced motion: kill the shimmer, keep the placeholder solid. */

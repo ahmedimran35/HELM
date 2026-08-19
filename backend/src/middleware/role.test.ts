@@ -1,70 +1,57 @@
-// Standalone smoke for requireAdmin middleware. Builds a tiny Hono app
-// in-process, mounts requireAuth + requireAdmin on a test route, and
-// verifies the role boundary:
-//   1. No cookie           -> 401
-//   2. Cookie w/ user role -> 403
-//   3. Cookie w/ admin     -> 200
+// Smoke for requireAuth + requireAdmin middleware. Builds a tiny
+// Hono app in-process, mounts the middlewares on a test route, and
+// asserts the auth boundary end-to-end against the real DB:
 //
-// We don't hit the real DB here — we stub the cookie parsing by
-// injecting a fake session id, then monkey-patch the loadUserForSession
-// import to return a user of our choosing. Real E2E coverage comes in
-// Phase 8 hardening; this is enough for Phase 0 confidence.
+//   1. requireAuth returns 401 if no cookie is present
+//   2. requireAdmin returns 403 if the role is 'user'
+//   3. requireAdmin returns 200 if the role is 'admin'
+//   4. Role flip propagates on the next request (no JWT-style
+//      caching of the role at login time).
 
+import { describe, test, expect, afterAll, beforeEach } from "bun:test";
 import { Hono } from "hono";
 import { sql } from "../db/client.ts";
-import { requireAuth } from "../middleware/auth.ts";
-import { requireAdmin } from "../middleware/role.ts";
+import { requireAuth } from "./auth.ts";
+import { requireAdmin } from "./role.ts";
 import { config } from "../config.ts";
 
-type SessionFixture = {
-  id: string;
-  user_id: string;
-  login_at: Date;
-  expires_at: Date;
-};
+const COOKIE_NAME = config.session.cookieName;
 
-type UserFixture = {
-  id: string;
-  username: string;
-  name: string;
-  role: "admin" | "user";
-  must_change_password: boolean;
-  is_active: boolean;
-};
-
-async function withFakeSession<T>(
-  role: "admin" | "user" | null,
-  fn: () => Promise<T>,
-): Promise<T> {
-  if (role === null) {
-    return fn();
-  }
-  // Make a real user + session in the DB so the middleware's lookup
-    // succeeds end-to-end. This is closer to production than mocking.
-  const username = `__probe_${role}_${Date.now()}`;
+async function makeUser(role: "admin" | "user"): Promise<string> {
+  const username = `__probe_${role}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const passwordHash =
     "$2a$12$abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123";
-  const userRows = await sql<{ id: string }[]>`
+  const r = await sql<{ id: string }[]>`
     INSERT INTO users (name, username, password_hash, role, must_change_password, is_active)
     VALUES (${username}, ${username}, ${passwordHash}, ${role}, false, true)
     RETURNING id
   `;
-  const userId = userRows[0]!.id;
-  const sessRows = await sql<{ id: string }[]>`
+  return r[0]!.id;
+}
+
+async function makeSession(userId: string): Promise<string> {
+  const r = await sql<{ id: string }[]>`
     INSERT INTO sessions (user_id, expires_at)
     VALUES (${userId}, now() + interval '1 hour')
     RETURNING id
   `;
-  const sessionId = sessRows[0]!.id;
-  try {
-    return await fn();
-  } finally {
-    await sql`DELETE FROM sessions WHERE id = ${sessionId}::uuid`;
-    await sql`DELETE FROM users WHERE id = ${userId}::uuid`;
-  }
+  return r[0]!.id;
 }
 
-async function buildApp(): Promise<Hono> {
+async function cleanup(): Promise<void> {
+  // Sessions cascade via FK to users.
+  await sql`DELETE FROM users WHERE username LIKE '__probe_%'`;
+}
+
+beforeEach(cleanup);
+afterAll(async () => {
+  await cleanup();
+  // Don't call sql.end() — bun:test runs all suites in one process and
+  // the pool is shared via globalThis.__helm_sql__. The process exit
+  // will tear it down.
+});
+
+function buildApp(): Hono {
   const app = new Hono();
   app.get("/api/probe", requireAuth, requireAdmin, (c) =>
     c.json({ ok: true, role: c.get("user").role }),
@@ -91,72 +78,49 @@ async function request(
   return { status: res.status, body };
 }
 
-async function main(): Promise<void> {
-  const app = await buildApp();
-
-  // 1. No cookie -> 401
-  const r1 = await request(app);
-  if (r1.status !== 401) throw new Error(`expected 401 for no cookie, got ${r1.status}`);
-
-  // 2. User cookie -> 403
-  await withFakeSession("user", async () => {
-    const fakeSession = await sql<SessionFixture[]>`
-      SELECT id, user_id, login_at, expires_at FROM sessions ORDER BY login_at DESC LIMIT 1
-    `;
-    const sid = fakeSession[0]!.id;
-    const cookie = `${config.session.cookieName}=${sid}`;
-    const r = await request(app, cookie);
-    if (r.status !== 403) throw new Error(`expected 403 for user, got ${r.status}`);
-    if ((r.body as { error?: string }).error !== "forbidden") {
-      throw new Error(`expected error="forbidden", got ${JSON.stringify(r.body)}`);
-    }
+describe("requireAuth + requireAdmin", () => {
+  test("requireAuth returns 401 if no cookie is present", async () => {
+    const app = buildApp();
+    const r = await request(app);
+    expect(r.status).toBe(401);
+    expect((r.body as { error?: string }).error).toBe("unauthenticated");
   });
 
-  // 3. Admin cookie -> 200
-  await withFakeSession("admin", async () => {
-    const fakeSession = await sql<SessionFixture[]>`
-      SELECT id, user_id, login_at, expires_at FROM sessions ORDER BY login_at DESC LIMIT 1
-    `;
-    const sid = fakeSession[0]!.id;
-    const cookie = `${config.session.cookieName}=${sid}`;
-    const r = await request(app, cookie);
-    if (r.status !== 200) throw new Error(`expected 200 for admin, got ${r.status}`);
-    if ((r.body as { role?: string }).role !== "admin") {
-      throw new Error(`expected role="admin", got ${JSON.stringify(r.body)}`);
-    }
+  test("requireAdmin returns 403 if the user role is 'user'", async () => {
+    const app = buildApp();
+    const userId = await makeUser("user");
+    const sid = await makeSession(userId);
+    const r = await request(app, `${COOKIE_NAME}=${sid}`);
+    expect(r.status).toBe(403);
+    expect((r.body as { error?: string }).error).toBe("forbidden");
   });
 
-  // 4. Verify the lookupUserForSession path returns the role at the moment
-  //    of the request — set up admin, then flip role to user in DB, then
-  //    hit the endpoint and confirm it now 403s.
-  await withFakeSession("admin", async () => {
-    const sessRows = await sql<SessionFixture[]>`
-      SELECT id, user_id, login_at, expires_at FROM sessions ORDER BY login_at DESC LIMIT 1
-    `;
-    const sid = sessRows[0]!.id;
-    const userId = sessRows[0]!.user_id;
-    const cookie = `${config.session.cookieName}=${sid}`;
+  test("requireAdmin returns 200 if the user role is 'admin'", async () => {
+    const app = buildApp();
+    const userId = await makeUser("admin");
+    const sid = await makeSession(userId);
+    const r = await request(app, `${COOKIE_NAME}=${sid}`);
+    expect(r.status).toBe(200);
+    expect((r.body as { role?: string }).role).toBe("admin");
+  });
 
-    // First hit: should be 200 (admin)
+  test("role flip propagates on the next request (no JWT-style caching)", async () => {
+    // Belt-and-braces: confirms the middleware re-reads the role
+    // from the DB on every request so a privilege downgrade takes
+    // effect immediately, not at the next login.
+    const app = buildApp();
+    const userId = await makeUser("admin");
+    const sid = await makeSession(userId);
+    const cookie = `${COOKIE_NAME}=${sid}`;
+
     const r1 = await request(app, cookie);
-    if (r1.status !== 200) throw new Error(`pre-flip expected 200, got ${r1.status}`);
+    expect(r1.status).toBe(200);
 
-    // Flip the role in the DB.
     await sql`UPDATE users SET role = 'user' WHERE id = ${userId}::uuid`;
-
-    // Same cookie, no refresh — should now 403 because middleware re-reads.
     const r2 = await request(app, cookie);
-    if (r2.status !== 403) throw new Error(`post-flip expected 403, got ${r2.status}`);
+    expect(r2.status).toBe(403);
 
-    // Flip back so the cleanup is clean.
+    // Flip back so cleanup is clean.
     await sql`UPDATE users SET role = 'admin' WHERE id = ${userId}::uuid`;
   });
-
-  console.log("✓ requireAdmin: 401 / 403 / 200 / role-flip-propagates all pass");
-  await sql.end();
-}
-
-main().catch((err) => {
-  console.error("✗", err);
-  process.exit(1);
 });

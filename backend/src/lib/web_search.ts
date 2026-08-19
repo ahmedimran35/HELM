@@ -15,6 +15,8 @@
 // instead of an empty list — the caller's system override will let
 // the model answer from training data rather than refuse outright.
 
+import { safeFetch, SafeFetchError } from "./safe-fetch.ts";
+
 export interface WebSearchHit {
   title: string;
   url: string;
@@ -370,13 +372,30 @@ function htmlToText(html: string): string {
 // ----------------------------------------------------------------- fetch
 
 async function fetchText(url: string, timeoutMs = TIMEOUT_MS): Promise<string> {
-  const r = await fetch(url, {
-    signal: AbortSignal.timeout(timeoutMs),
-    headers: {
-      "User-Agent": USER_AGENT,
-      "Accept-Language": "en-US,en;q=0.9",
-    },
-  });
+  // safeFetch validates the URL against the SSRF guard (rejects
+  // private/loopback/metadata IPs, embedded credentials, numeric IP
+  // encodings, non-default ports, DNS rebinding), caps the response
+  // body, and disables redirects. The user-driven URLs the chat /
+  // panel flows pass in must not be allowed to pivot to a private IP
+  // mid-request.
+  let r: Response;
+  try {
+    r = await safeFetch(url, {
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: {
+        "User-Agent": USER_AGENT,
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      // The body cap (default 5 MB) is large enough for any Wikipedia
+      // article + every search-engine HTML page we'd ever see. If a
+      // target tries to return gigabytes we abort the read.
+    });
+  } catch (err) {
+    if (err instanceof SafeFetchError) {
+      throw new Error(`safe_fetch_blocked: ${err.message}`);
+    }
+    throw err;
+  }
   if (!r.ok) throw new Error(`fetch ${url} → ${r.status}`);
   return r.text();
 }

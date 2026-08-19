@@ -298,11 +298,12 @@ async function callLightpandaSearch(
       await assertSafeOutboundUrl(url, { allowLocal: false });
     } catch (err) {
       if (err instanceof SafeFetchError) {
+        console.warn("[websearch] safe_blocked url:", (err as Error).message);
         return {
           query,
           service: "safe_blocked",
           results: [],
-          answer: `URL blocked for safety: ${err.message}`,
+          answer: "URL blocked for safety",
           remaining_today: 0,
           limit: 0,
         };
@@ -532,6 +533,7 @@ router.post("/", async (c) => {
         auto_configured: configured.length === 0 || configured[0]?.service === "lightpanda",
       });
     } catch (err) {
+      console.warn("[websearch] search failed:", (err as Error).message);
       lastErr = (err as Error).message;
       await logAudit({
         userId: user.id,
@@ -544,7 +546,7 @@ router.post("/", async (c) => {
   }
   return c.json({
     error: lastErr
-      ? `lightpanda + every configured search provider failed (${lastErr})`
+      ? "search_unavailable"
       : "no results for that query",
     remaining_today: quota.remaining,
     limit: quota.limit,

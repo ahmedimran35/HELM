@@ -1,3 +1,4 @@
+import { lazy, Suspense, type ReactNode } from "react";
 import {
   BrowserRouter,
   Routes,
@@ -7,38 +8,119 @@ import {
 } from "react-router-dom";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
 import { AppShell } from "./components/shell/AppShell";
-import { LoginPage } from "./pages/Login";
-import { ChangePasswordPage } from "./pages/ChangePassword";
 import { HomePage } from "./pages/Home";
-import { ChatPage } from "./pages/Chat";
-import { PanelsPage } from "./pages/Panels";
-import { WebSearchPage } from "./pages/WebSearch";
-import { WorkspacePage } from "./pages/Workspace";
-import { SandboxPage } from "./pages/Sandbox";
-import { WatchesPage } from "./pages/Watches";
-import { AnalyticsPage } from "./pages/Analytics";
-import { RequestsPage } from "./pages/Requests";
-import { ProvidersPage } from "./pages/Providers";
-import { IntegrationsPage } from "./pages/Integrations";
-import { MemoryStrategiesPage } from "./pages/MemoryStrategies";
-import { ConnectedAccountsPage } from "./pages/ConnectedAccounts";
-import { SettingsPage } from "./pages/Settings";
-import { AppsPage } from "./pages/Apps";
-import { SkillsPage } from "./pages/Skills";
-import { FeedbackPage } from "./pages/Feedback";
-// Tier 4 (Discovery): marketplace, search, knowledge graph
-import { MarketplacePage } from "./pages/Marketplace";
-import { SearchPage } from "./pages/Search";
-import { KnowledgeGraphPage } from "./pages/KnowledgeGraph";
-import { WorkflowsPage, WorkflowEditorPage } from "./pages/Workflows";
-import { ApprovalsPage } from "./pages/Approvals";
-import { ReplayPage } from "./components/system/ReplayBar";
-import { SetupPage } from "./pages/Setup";
-import { StatusPage } from "./pages/Status";
-import { SpendCapsPage } from "./pages/SpendCaps";
-import { HealthPage } from "./pages/Health";
-import { PerfPage } from "./pages/Perf";
-import type { ReactNode } from "react";
+import { PageSkeleton } from "./components/ui/feedback/PageSkeleton";
+
+// ── Lazy page chunks ─────────────────────────────────────────────────
+// Each page is split into its own chunk so the initial bundle only
+// ships the shell + login + setup. Subsequent routes load on demand.
+// The lazy wrapper maps each module's named export to `default` so the
+// chunk can be rendered with <Route element={<XPage />}>.
+const LoginPage = lazy(() =>
+  import("./pages/Login").then((m) => ({ default: m.LoginPage })),
+);
+const ChangePasswordPage = lazy(() =>
+  import("./pages/ChangePassword").then((m) => ({
+    default: m.ChangePasswordPage,
+  })),
+);
+const ChatPage = lazy(() =>
+  import("./pages/Chat").then((m) => ({ default: m.ChatPage })),
+);
+const PanelsPage = lazy(() =>
+  import("./pages/Panels").then((m) => ({ default: m.PanelsPage })),
+);
+const WebSearchPage = lazy(() =>
+  import("./pages/WebSearch").then((m) => ({ default: m.WebSearchPage })),
+);
+const WorkspacePage = lazy(() =>
+  import("./pages/Workspace").then((m) => ({ default: m.WorkspacePage })),
+);
+const SandboxPage = lazy(() =>
+  import("./pages/Sandbox").then((m) => ({ default: m.SandboxPage })),
+);
+const WatchesPage = lazy(() =>
+  import("./pages/Watches").then((m) => ({ default: m.WatchesPage })),
+);
+const AnalyticsPage = lazy(() =>
+  import("./pages/Analytics").then((m) => ({ default: m.AnalyticsPage })),
+);
+const RequestsPage = lazy(() =>
+  import("./pages/Requests").then((m) => ({ default: m.RequestsPage })),
+);
+const ProvidersPage = lazy(() =>
+  import("./pages/Providers").then((m) => ({ default: m.ProvidersPage })),
+);
+const IntegrationsPage = lazy(() =>
+  import("./pages/Integrations").then((m) => ({
+    default: m.IntegrationsPage,
+  })),
+);
+const MemoryStrategiesPage = lazy(() =>
+  import("./pages/MemoryStrategies").then((m) => ({
+    default: m.MemoryStrategiesPage,
+  })),
+);
+const ConnectedAccountsPage = lazy(() =>
+  import("./pages/ConnectedAccounts").then((m) => ({
+    default: m.ConnectedAccountsPage,
+  })),
+);
+const SettingsPage = lazy(() =>
+  import("./pages/Settings").then((m) => ({ default: m.SettingsPage })),
+);
+const AppsPage = lazy(() =>
+  import("./pages/Apps").then((m) => ({ default: m.AppsPage })),
+);
+const SkillsPage = lazy(() =>
+  import("./pages/Skills").then((m) => ({ default: m.SkillsPage })),
+);
+const FeedbackPage = lazy(() =>
+  import("./pages/Feedback").then((m) => ({ default: m.FeedbackPage })),
+);
+const MarketplacePage = lazy(() =>
+  import("./pages/Marketplace").then((m) => ({ default: m.MarketplacePage })),
+);
+const SearchPage = lazy(() =>
+  import("./pages/Search").then((m) => ({ default: m.SearchPage })),
+);
+const KnowledgeGraphPage = lazy(() =>
+  import("./pages/KnowledgeGraph").then((m) => ({
+    default: m.KnowledgeGraphPage,
+  })),
+);
+const WorkflowsPage = lazy(() =>
+  import("./pages/Workflows").then((m) => ({ default: m.WorkflowsPage })),
+);
+const WorkflowEditorPage = lazy(() =>
+  import("./pages/Workflows").then((m) => ({
+    default: m.WorkflowEditorPage,
+  })),
+);
+const ApprovalsPage = lazy(() =>
+  import("./pages/Approvals").then((m) => ({ default: m.ApprovalsPage })),
+);
+const ReplayPage = lazy(() =>
+  import("./components/system/ReplayBar").then((m) => ({
+    default: m.ReplayPage,
+  })),
+);
+const SetupPage = lazy(() =>
+  import("./pages/Setup").then((m) => ({ default: m.SetupPage })),
+);
+const StatusPage = lazy(() =>
+  import("./pages/Status").then((m) => ({ default: m.StatusPage })),
+);
+const SpendCapsPage = lazy(() =>
+  import("./pages/SpendCaps").then((m) => ({ default: m.SpendCapsPage })),
+);
+const HealthPage = lazy(() =>
+  import("./pages/Health").then((m) => ({ default: m.HealthPage })),
+);
+const PerfPage = lazy(() =>
+  import("./pages/Perf").then((m) => ({ default: m.PerfPage })),
+);
+
 import { NAV_ITEMS } from "./nav/items";
 import { ToastProvider } from "./components/ui/feedback/Toast";
 import {
@@ -150,31 +232,33 @@ function NavRoute({ path }: { path: string }) {
 function ShellRoutes() {
   return (
     <AppShell>
-      <Routes>
-        <Route path="/" element={<HomePage />} />
-        {NAV_ITEMS.map((item) => (
-          <Route
-            key={item.path}
-            path={item.path}
-            element={
-              item.adminOnly ? (
-                <RequireAdmin>
+      <Suspense fallback={<PageSkeleton />}>
+        <Routes>
+          <Route path="/" element={<HomePage />} />
+          {NAV_ITEMS.map((item) => (
+            <Route
+              key={item.path}
+              path={item.path}
+              element={
+                item.adminOnly ? (
+                  <RequireAdmin>
+                    <NavRoute path={item.path} />
+                  </RequireAdmin>
+                ) : (
                   <NavRoute path={item.path} />
-                </RequireAdmin>
-              ) : (
-                <NavRoute path={item.path} />
-              )
-            }
-          />
-        ))}
-        {/* Tier 1 co-pilot — time-travel replay viewer. Param-driven
-            so a deep link from /panels opens straight into a panel's
-            snapshot timeline. */}
-        <Route path="/replay/:panelId" element={<ReplayPage />} />
-        {/* Tier 2 — visual workflow canvas editor. */}
-        <Route path="/workflows/:id" element={<WorkflowEditorPage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+                )
+              }
+            />
+          ))}
+          {/* Tier 1 co-pilot — time-travel replay viewer. Param-driven
+              so a deep link from /panels opens straight into a panel's
+              snapshot timeline. */}
+          <Route path="/replay/:panelId" element={<ReplayPage />} />
+          {/* Tier 2 — visual workflow canvas editor. */}
+          <Route path="/workflows/:id" element={<WorkflowEditorPage />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Suspense>
     </AppShell>
   );
 }
@@ -188,29 +272,31 @@ export function App() {
       <AuthProvider>
         <ToastProvider>
           <CommandPaletteProvider>
-            <Routes>
-              {/* Tier 7 — onboarding wizard. The page itself probes
-                  /api/setup/status and redirects to /login if the
-                  system is already configured. */}
-              <Route path="/setup" element={<SetupPage />} />
-              <Route path="/login" element={<LoginPage />} />
-              <Route
-                path="/change-password"
-                element={
-                  <RequireAuth>
-                    <ChangePasswordPage />
-                  </RequireAuth>
-                }
-              />
-              <Route
-                path="/*"
-                element={
-                  <RequireAuth>
-                    <ShellRoutes />
-                  </RequireAuth>
-                }
-              />
-            </Routes>
+            <Suspense fallback={<PageSkeleton />}>
+              <Routes>
+                {/* Tier 7 — onboarding wizard. The page itself probes
+                    /api/setup/status and redirects to /login if the
+                    system is already configured. */}
+                <Route path="/setup" element={<SetupPage />} />
+                <Route path="/login" element={<LoginPage />} />
+                <Route
+                  path="/change-password"
+                  element={
+                    <RequireAuth>
+                      <ChangePasswordPage />
+                    </RequireAuth>
+                  }
+                />
+                <Route
+                  path="/*"
+                  element={
+                    <RequireAuth>
+                      <ShellRoutes />
+                    </RequireAuth>
+                  }
+                />
+              </Routes>
+            </Suspense>
             <CmdKListener />
           </CommandPaletteProvider>
         </ToastProvider>

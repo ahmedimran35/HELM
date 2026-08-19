@@ -309,19 +309,96 @@ Detection rules to ship in the SIEM:
 
 ---
 
-## 6. Production deployment checklist
+## 6. Supply-chain hardening (new in this rev)
+
+### 6.1 Base image digest pinning
+
+`backend/Dockerfile` and every `image:` in the compose files should
+resolve to an immutable digest, not a mutable tag. The shipped
+files pin:
+
+- `oven/bun:1.3.14-alpine` →
+  `sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0`
+- `lightpanda/browser:0.3.7` in `docker-compose.yml` (was `:nightly` —
+  nightly is a rolling tag, never use it for reproducible deployments)
+
+Resolve the digest with:
+
+```bash
+docker buildx imagetools inspect <image>:<tag>
+```
+
+Refresh digests whenever you bump a version. The `.github/dependabot.yml`
+PR for a docker-image bump will reference the new digest — accept that
+PR once CI is green and the old digest is replaced.
+
+### 6.2 Postgres TLS (intra-cluster)
+
+Plain Postgres is fine for local dev. For anything else, terminate TLS
+inside the cluster by uncommenting the `command:` + `volumes:` blocks
+on the `postgres` service in `docker-compose.prod.yml` and dropping
+`server.crt` / `server.key` into `./secrets/postgres/`. Then switch
+the api's `DATABASE_URL` to `?sslmode=require`. Until that's done,
+the prod overlay is plaintext on the docker network — fine for the
+threat model where the docker network is already a trust boundary,
+NOT fine for any environment where the docker network is shared.
+
+### 6.3 Redis requirepass (now required in dev too)
+
+The dev compose now sets `redis-server --requirepass $REDIS_PASSWORD`
+and the api service connects with `redis://:$REDIS_PASSWORD@redis:6379/0`.
+The default `helm_dev` is a marker that the stack is running in dev;
+override it via `.env` for any non-localhost use. Redis refuses
+connections without a password, so the api will fail to boot loudly
+if the two values drift.
+
+### 6.4 Secret scanning in CI
+
+`.github/workflows/secret-scan.yml` runs `gitleaks` on every push + PR
+with `fetch-depth: 0` (full history). Any leak fails the build. The
+CI also fails closed: a leak in PR history blocks merge until the
+secret is rotated and the history is rewritten.
+
+`.env`, `.env.*`, and `node_modules/` are in `.gitignore`, so the
+primary defense is still pre-commit hygiene. The CI scan is the
+last-line backstop.
+
+### 6.5 SPA Content-Security-Policy
+
+`frontend/index.html` ships a `<meta http-equiv="Content-Security-Policy">`
+tag with `default-src 'self'`, an inline-script exception for the
+theme bootstrap, `frame-ancestors 'none'`, and explicit allowlists for
+Google Fonts. The api independently sets
+`Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`
+on every response (see `backend/src/middleware/security-headers.ts`).
+
+When the production API URL is `https://api.example.com`, the SPA's
+CSP must be rebuilt with `connect-src 'self' https://api.example.com
+wss://api.example.com` (the dev CSP hardcodes `localhost:3000`).
+Failing to do so silently breaks WS + fetch calls at runtime — check
+the browser console if the live panels go blank after a deploy.
+
+---
+
+## 7. Production deployment checklist
 
 Before going live, every box must be checked:
 
 - [ ] `SESSION_SECRET` is 48+ bytes from a CSPRNG, **never** the dev default
 - [ ] `ADMIN_PASSWORD` is regenerated at first boot (the code forces
       `must_change_password=true`; the operator must log in and rotate)
+- [ ] `POSTGRES_PASSWORD` is set in `.env` (the prod overlay requires
+      it; the dev overlay defaults to `helm_dev` only for convenience)
+- [ ] `REDIS_PASSWORD` is set in `.env` and matches the dev compose's
+      `REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0`
 - [ ] `.env` is **never** committed to git (`.gitignore` covers it;
       verify with `git log -p -- .env` showing zero history)
 - [ ] `docker-compose.prod.yml` is used, **not** `docker-compose.yml`
 - [ ] All containers run with `read_only: true`, `cap_drop: [ALL]`,
       `no-new-privileges`
 - [ ] Postgres runs on a private network, **not** exposed to the host
+- [ ] Postgres TLS is enabled (see §6.2) — outline requires the cert
+      files in `./secrets/postgres/` before going live
 - [ ] The egress firewall (§2) is active
 - [ ] TLS is terminated at a real reverse proxy (Caddy / nginx / cloud LB)
 - [ ] `Strict-Transport-Security: max-age=63072000; preload` is in the
@@ -329,7 +406,11 @@ Before going live, every box must be checked:
 - [ ] All session cookies are `Secure; HttpOnly; SameSite=Strict;
       __Host-` prefixed
 - [ ] CSP `default-src 'none'` is verified via the security-headers
-      middleware
+      middleware (api side) and the SPA `<meta http-equiv="CSP">` tag
+      (shell side) — see §6.5
+- [ ] Base image digests are pinned and reviewed on every Dependabot
+      docker PR (see §6.1)
+- [ ] `secret-scan` GitHub Action is green on the main branch
 - [ ] Real-time alerting is configured for `account_locked` events
 - [ ] Audit logs are forwarded to an append-only store
 
@@ -337,7 +418,7 @@ If any box is unchecked, the corresponding sector's score is below 10/10.
 
 ---
 
-## 7. Score impact table
+## 8. Score impact table
 
 | Section | If applied | If skipped |
 |---|---|---|
@@ -346,8 +427,13 @@ If any box is unchecked, the corresponding sector's score is below 10/10.
 | §3 Network segmentation | S15 = 10/10 | S15 = 6/10 |
 | §4 Audit immutability | S19 = 9/10 | S19 = 7/10 |
 | §5 SIEM | S20 = 9/10 | S20 = 5/10 |
-| §6 All deployment boxes | all sectors +0.5–1.0 | (varies) |
+| §6.1 Base image digests | supply-chain = 10/10 | supply-chain = 6/10 |
+| §6.2 Postgres TLS | S15 = 10/10 | S15 = 8/10 |
+| §6.3 Redis requirepass | S15 = 9/10 | S15 = 7/10 |
+| §6.4 Secret scanning | supply-chain = 10/10 | supply-chain = 5/10 |
+| §6.5 SPA CSP | XSS = 10/10 | XSS = 7/10 |
+| §7 All deployment boxes | all sectors +0.5–1.0 | (varies) |
 
-Applying **§1, §2, §3, §5, §6** brings the deployment-side average from
-the 5–7/10 range into the 9–10/10 range. The code-side work in
+Applying **§1, §2, §3, §5, §6, §7** brings the deployment-side average
+from the 5–7/10 range into the 9–10/10 range. The code-side work in
 S1–S10, S12–S14, S16–S19 already gives 9–10/10 across the board.

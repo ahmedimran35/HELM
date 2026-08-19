@@ -5,6 +5,7 @@ import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { CallSign } from "../components/ui/CallSign";
 import { Badge } from "../components/ui/Badge";
+import { Skeleton } from "../components/ui/feedback/Skeleton";
 
 /**
  * Login — single page for everyone. The same form serves admin and user;
@@ -111,13 +112,14 @@ export function LoginPage() {
             {submitting ? "Signing in…" : "Sign in"}
           </Button>
 
-          {bootstrapped === true && (
+          {bootstrapped === null ? (
+            <Skeleton variant="text" width="90%" className="mt-4 mx-auto" />
+          ) : bootstrapped === true ? (
             <p className="mt-4 mono-caps text-[10px] text-textFaint leading-relaxed">
               First-boot admin already exists. New accounts are created from
               inside the admin panel only — there is no public sign-up.
             </p>
-          )}
-          {bootstrapped === false && (
+          ) : (
             <p className="mt-4 mono-caps text-[10px] text-brass leading-relaxed">
               First-boot: ADMIN_USERNAME / ADMIN_PASSWORD from the server .env
               are seeded on first launch.

@@ -20,9 +20,11 @@ import { Hono } from "hono";
 import { sql } from "../db/client.ts";
 import { requireAuth } from "../middleware/auth.ts";
 import { logAudit } from "../lib/audit.ts";
+import { sanitizeContentDispositionFilename, UnsafeFilenameError } from "../lib/safe-filename.ts";
 import { getHarnessByKind } from "../harness/router.ts";
 import { mockHarness } from "../harness/mock.ts";
 import type { HarnessMessage } from "../harness/types.ts";
+import { logSecurityEvent } from "../lib/security-events.ts";
 
 const router = new Hono();
 router.use("*", requireAuth);
@@ -104,6 +106,22 @@ router.post("/", async (c) => {
   }
   const buf = new Uint8Array(await file.arrayBuffer());
   if (buf.byteLength > MAX_UPLOAD_BYTES) {
+    // Surface a security event for oversized uploads. The 25 MB cap
+    // is enforced here, but operators want a real-time signal when
+    // someone is repeatedly trying to push >25 MB blobs (either a
+    // buggy client or an attacker probing for the cap).
+    logSecurityEvent({
+      type: "large_upload",
+      severity: "warn",
+      userId: user.id,
+      route: "/api/files",
+      details: {
+        byte_size: buf.byteLength,
+        cap: MAX_UPLOAD_BYTES,
+        purpose: purposeRaw,
+      },
+      ts: Date.now(),
+    });
     return c.json(
       { error: `file too large (max ${MAX_UPLOAD_BYTES} bytes)` },
       413,
@@ -198,10 +216,34 @@ router.get("/:id/download", async (c) => {
   const safeType = dangerous.test(r.mime_type ?? "")
     ? "application/octet-stream"
     : (r.mime_type || "application/octet-stream");
+  // Sanitize the filename used in Content-Disposition. The old code did
+  // `encodeURIComponent(r.name)` which leaks `"`, `\r`, `\n`, and `;`
+  // — enough to inject a second `filename=` parameter and ship a
+  // crafted `evil.html` to the user. `sanitizeContentDispositionFilename`
+  // validates + emits both an ASCII fallback and an RFC 5987
+  // `filename*=UTF-8''…` parameter.
+  let cdHeader: string;
+  try {
+    cdHeader = sanitizeContentDispositionFilename(r.name).header;
+  } catch (err) {
+    // Hard-reject names that fail validation (path separators, control
+    // chars, hidden files). Return a synthetic ASCII name rather than
+    // the user's stored name — we don't want to expose their stored
+    // value verbatim via a redirect-or-error leak path either.
+    logSecurityEvent({
+      type: "suspicious_payload",
+      severity: "warn",
+      userId: user.id,
+      route: "/api/files/:id/download",
+      details: { reason: (err as Error).message, file_id: id },
+      ts: Date.now(),
+    });
+    cdHeader = `attachment; filename="download.bin"`;
+  }
   return new Response(new Uint8Array(r.bytes), {
     headers: {
       "Content-Type": safeType,
-      "Content-Disposition": `attachment; filename="${encodeURIComponent(r.name)}"`,
+      "Content-Disposition": cdHeader,
       "Content-Security-Policy": "default-src 'none'; sandbox",
       "X-Content-Type-Options": "nosniff",
     },
@@ -439,8 +481,11 @@ async function transcribeAudio(
       stub: false,
     };
   } catch (err) {
+    // Don't leak the underlying error message — the transcript lands
+    // in the DB and is returned to the client via the file metadata.
+    console.warn("[files] whisper failed:", (err as Error).message);
     return {
-      text: `[whisper failed: ${(err as Error).message}]`,
+      text: "[whisper failed: transcription error]",
       duration_ms: estimateAudioDuration(bytes.byteLength, mime),
       stub: true,
     };
@@ -590,8 +635,11 @@ async function runChatText(
     const text = body.choices?.[0]?.message?.content ?? "";
     return { text, stub: false };
   } catch (err) {
+    // Don't leak the underlying error message — the summary lands in
+    // the DB and is returned to the client via the file metadata.
+    console.warn("[files] openai fetch failed:", (err as Error).message);
     return {
-      text: `[openai fetch failed: ${(err as Error).message}]`,
+      text: "[openai fetch failed: model error]",
       stub: true,
     };
   }

@@ -16,6 +16,8 @@ export interface SessionRow {
   user_id: string;
   login_at: Date;
   expires_at: Date;
+  ip: string | null;
+  last_seen_ip: string | null;
 }
 
 export interface UserRow {
@@ -33,10 +35,14 @@ export async function createSession(opts: {
   userAgent?: string | null;
 }): Promise<SessionRow> {
   const expiresAt = new Date(Date.now() + config.session.ttlSeconds * 1000);
+  // Pin last_seen_ip to the login IP — first authenticated request
+  // shouldn't immediately trip the IP-bind check.
   const rows = await sql<SessionRow[]>`
-    INSERT INTO sessions (user_id, expires_at, ip, user_agent)
-    VALUES (${opts.userId}, ${expiresAt}, ${opts.ip ?? null}, ${opts.userAgent ?? null})
-    RETURNING id, user_id, login_at, expires_at
+    INSERT INTO sessions (user_id, expires_at, ip, last_seen_ip, user_agent)
+    VALUES (${opts.userId}, ${expiresAt},
+            ${opts.ip ?? null}, ${opts.ip ?? null},
+            ${opts.userAgent ?? null})
+    RETURNING id, user_id, login_at, expires_at, ip, last_seen_ip
   `;
   return rows[0]!;
 }
@@ -57,8 +63,10 @@ const IDLE_TTL_MS = (() => {
 export async function findSession(sessionId: string): Promise<SessionRow | null> {
   // Effective expiry = MIN(absolute expires_at, last_seen_at + IDLE_TTL).
   // We do the sliding-window check in SQL so we don't pull dead rows.
+  // We also pull `ip` + `last_seen_ip` so requireAuth can run the
+  // IP-bind hijack check.
   const rows = await sql<SessionRow[]>`
-    SELECT id, user_id, login_at, expires_at
+    SELECT id, user_id, login_at, expires_at, ip, last_seen_ip
     FROM sessions
     WHERE id = ${sessionId}
       AND logout_at IS NULL
@@ -69,22 +77,43 @@ export async function findSession(sessionId: string): Promise<SessionRow | null>
   return rows[0] ?? null;
 }
 
-// Touch last_seen_at and append to sections_visited. Best-effort: if the
-// DB write fails, the request still proceeds — observability shouldn't
-// break the auth path.
-export async function touchSession(sessionId: string, section: string): Promise<void> {
+// Touch last_seen_at, last_seen_ip, and append to sections_visited.
+// Best-effort: if the DB write fails, the request still proceeds —
+// observability shouldn't break the auth path. `ip` may be null (the
+// caller didn't have a req.ip handy, e.g. unit tests); in that case
+// we leave last_seen_ip as-is.
+export async function touchSession(
+  sessionId: string,
+  section: string,
+  opts: { ip?: string | null } = {},
+): Promise<void> {
   try {
-    await sql`
-      UPDATE sessions
-      SET last_seen_at = now(),
-          sections_visited = (
-            CASE
-              WHEN ${section} = ANY(sections_visited) THEN sections_visited
-              ELSE array_append(sections_visited, ${section})
-            END
-          )
-      WHERE id = ${sessionId}
-    `;
+    if (opts.ip != null) {
+      await sql`
+        UPDATE sessions
+        SET last_seen_at = now(),
+            last_seen_ip = ${opts.ip},
+            sections_visited = (
+              CASE
+                WHEN ${section} = ANY(sections_visited) THEN sections_visited
+                ELSE array_append(sections_visited, ${section})
+              END
+            )
+        WHERE id = ${sessionId}
+      `;
+    } else {
+      await sql`
+        UPDATE sessions
+        SET last_seen_at = now(),
+            sections_visited = (
+              CASE
+                WHEN ${section} = ANY(sections_visited) THEN sections_visited
+                ELSE array_append(sections_visited, ${section})
+              END
+            )
+        WHERE id = ${sessionId}
+      `;
+    }
   } catch (err) {
     console.warn("touchSession failed:", (err as Error).message);
   }

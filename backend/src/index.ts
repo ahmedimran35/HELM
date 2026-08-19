@@ -50,6 +50,7 @@ import feedbackRoutes from "./routes/feedback.ts";
 import { startPreferenceScheduler } from "./lib/preference-learner.ts";
 import { startAutoSummarizeScheduler } from "./lib/auto-summarize.ts";
 import { startAuditRetention } from "./lib/audit-retention.ts";
+import { startCacheRetention } from "./lib/cache-retention.ts";
 import statusRoutes from "./routes/status.ts";
 import comboRoutes from "./routes/combo.ts";
 // Tier 3 — Voice + Multimodal
@@ -66,8 +67,16 @@ import {
   preferencesRouter,
   startNotificationScheduler,
 } from "./lib/notifications.ts";
+import { compression, cachingEtag } from "./middleware/compress.ts";
 
 const app = new Hono();
+
+// Optimisation: gzip + ETag reduce bandwidth and let browsers cache
+// identical responses. Streaming SSE paths opt out by going through
+// streamSSE() which sets Transfer-Encoding: chunked and bypasses
+// compress()'s body buffer.
+app.use("*", compression());
+app.use("*", cachingEtag);
 
 app.use("*", logger());
 app.use(
@@ -242,6 +251,12 @@ app.notFound((c) => {
     }
     if (/^\/api\/providers\/[0-9a-f-]+\/fetch$/.test(path)) {
       return ["POST"];
+    }
+    if (/^\/api\/providers\/[0-9a-f-]+\/test$/.test(path)) {
+      return ["POST"];
+    }
+    if (/^\/api\/providers\/[0-9a-f-]+\/key$/.test(path)) {
+      return ["PUT"];
     }
     if (/^\/api\/models\/[0-9a-f-]+$/.test(path)) {
       return ["GET", "DELETE"];
@@ -480,10 +495,34 @@ app.route("/api/cache", cacheRoutes);
 app.route("/api/spend-caps", spendCapsRoutes);
 app.route("/api/perf", perfRoutes);
 
+// CSP violation report endpoint. NO auth (browsers may send reports
+// from any origin, including hostile same-origin pages). Body size
+// is capped and the payload is sanitised before being logged.
+import cspReportRoutes from "./routes/csp-report.ts";
+app.route("/api/csp-report", cspReportRoutes);
+
 // Auth (login, logout, me, change-password, bootstrap-status) mounted
 // LATE so the wildcard requireAuth doesn't catch public endpoints
 // registered before it (setup, status, perf, etc).
 app.route("/api", authRoutes);
+
+// ── OpenAPI documentation surface ───────────────────────────────────
+// Two PUBLIC (no-auth) endpoints:
+//   GET /api/openapi.json   — the OpenAPI 3.1 spec
+//   GET /api/docs           — Swagger UI rendering the spec
+//
+// Both are mounted LAST so any 404 fall-through from other routers
+// doesn't accidentally hit the docs handlers. Implementation lives
+// in src/routes/openapi-mount.ts.
+//
+// We mount the docs app under a dedicated `_docs` prefix so its
+// OpenAPIHono-registered routes (mirrors of the real routes) don't
+// shadow the actual handlers mounted below. Without this, every
+// `/api/*` request gets caught by the docs copy which doesn't have
+// the auth middleware in its chain — leading to `c.get("user")`
+// returning undefined and 500s on every authenticated endpoint.
+import { buildOpenAPIDocsApp } from "./routes/openapi-mount.ts";
+app.route("/api/_docs", buildOpenAPIDocsApp());
 
 // Tier 6 — self-improvement: feedback CRUD + profile + stats.
 app.route("/api/feedback", feedbackRoutes);
@@ -503,7 +542,7 @@ app.use(
 );
 app.use(
   "/api/login",
-  rateLimitByBody({ limit: 5, windowMs: 60_000, bodyKey: "username", prefix: "login-u" }),
+  rateLimitByBody({ limit: 5, windowMs: 60_000, bodyKey: "username", prefix: "login-u", scope: "login-username" }),
 );
 app.use(
   "/api/chat",
@@ -543,6 +582,7 @@ async function main(): Promise<void> {
   startPreferenceScheduler();
   startAutoSummarizeScheduler();
   startAuditRetention();
+  startCacheRetention();
 
   const server = Bun.serve<{ panelId: string; userId: string; name: string }>({
     port: config.api.port,

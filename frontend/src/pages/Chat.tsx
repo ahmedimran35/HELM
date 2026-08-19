@@ -16,12 +16,14 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { apiGet, apiPost } from "../api/client";
+import { openapi, type Model, type ChatMessage } from "../api/openapi";
 import { listHarnesses, type HarnessInfo, type HarnessKind } from "../api/harness";
 import { Button } from "../components/ui/Button";
 import { TypingDots } from "../components/ui/TypingDots";
 import { Avatar } from "../components/ui/Avatar";
 import { Markdown } from "../components/ui/Markdown";
 import { Badge } from "../components/ui/Badge";
+import { Input } from "../components/ui/Input";
 import { CitationCard, type Citation } from "../components/ui/data/CitationCard";
 import { safeWindowOpen, safeHref } from "../lib/safe-href";
 
@@ -60,13 +62,7 @@ import {
 } from "../components/ui/Icon";
 import { cn } from "../lib/cn";
 
-interface ModelRow {
-  id: string;
-  display_name: string;
-  external_id: string;
-  assigned: boolean;
-  pending_request: boolean;
-}
+interface ModelRow extends Pick<Model, "id" | "display_name" | "external_id" | "assigned" | "pending_request"> {}
 
 interface SearchMeta {
   service: string;
@@ -124,12 +120,16 @@ export function ChatPage() {
   const [showVoice, setShowVoice] = useState(false);
   const [showBrowser, setShowBrowser] = useState(false);
   const [showDocGen, setShowDocGen] = useState(false);
+  const [refreshMode, setRefreshMode] = useState(false);
+  const [showAllHarnesses, setShowAllHarnesses] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const sendStartRef = useRef<number>(0);
+  const streamMinUntilRef = useRef<number>(0);
 
   useEffect(() => {
-    apiGet<ModelRow[]>("/models").then((m) => {
+    openapi.listModels().then((all) => {
+      const m = all as unknown as ModelRow[];
       setModels(m);
       const firstAssigned = m.find((r) => r.assigned) ?? m[0] ?? null;
       if (firstAssigned) setActive(firstAssigned.id);
@@ -158,8 +158,9 @@ export function ChatPage() {
     if (!active || active === loadedFor) return;
     setMessages([]);
     setLoadedFor(active);
-    apiGet<Message[]>(`/chat/threads/${active}`)
-      .then(async (rows) => {
+    openapi.chatThread(active)
+      .then(async (rawRows) => {
+        const rows = rawRows as unknown as Message[];
         // Tier 4 (Discovery) — fetch persistent citations for every
         // assistant turn in one sweep. Best-effort: any failure
         // leaves the lineage off but doesn't block rendering.
@@ -242,10 +243,25 @@ export function ChatPage() {
   async function requestAccess(modelId: string) {
     try {
       await apiPost("/access-requests", { model_id: modelId });
-      const m = await apiGet<ModelRow[]>("/models");
+      const m = (await openapi.listModels()) as unknown as ModelRow[];
       setModels(m);
+      toast.addToast({
+        id: `chat-access-ok-${modelId}`,
+        title: "Access requested",
+        description: "An admin will review your request.",
+        tone: "info",
+        duration: 2500,
+      });
     } catch (err) {
-      setError((err as Error).message);
+      const msg = (err as Error).message;
+      setError(msg);
+      toast.addToast({
+        id: `chat-access-err-${modelId}`,
+        title: "Access request failed",
+        description: msg,
+        tone: "warning",
+        duration: 4000,
+      });
     }
   }
 
@@ -278,6 +294,9 @@ export function ChatPage() {
     if (!composed.trim()) return;
     const content = composed;
     setInput("");
+    // Refresh-mode is per-message: stay in normal cache mode for the
+    // next message after the user has explicitly bypassed once.
+    setRefreshMode(false);
     setError(null);
     setAttachments([]);
     setPendingVoice(null);
@@ -285,11 +304,20 @@ export function ChatPage() {
     setMessages((prev) => [...prev, { role: "user", content: typed }]);
     setStreaming(true);
     sendStartRef.current = Date.now();
+    // Minimum visible-stream time so the typing dots always get a
+    // chance to render even on a fast cache hit. Without this, a
+    // cached response flips streaming→false in <50ms and the user
+    // never sees the thinking animation. 800ms is enough for the
+    // wave to make several full cycles so the user clearly sees
+    // the rhythm.
+    const minStreamMs = 800;
+    streamMinUntilRef.current = Date.now() + minStreamMs;
 
     const controller = new AbortController();
     abortRef.current = controller;
     try {
-      const res = await fetch("/api/chat", {
+      const url = refreshMode ? "/api/chat?refresh=1" : "/api/chat";
+      const res = await fetch(url, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -302,7 +330,15 @@ export function ChatPage() {
         signal: controller.signal,
       });
       if (!res.ok || !res.body) {
-        setError(`request failed: ${res.status}`);
+        const msg = `request failed: ${res.status}`;
+        setError(msg);
+        toast.addToast({
+          id: `chat-send-err-${Date.now()}`,
+          title: "Send failed",
+          description: msg,
+          tone: "warning",
+          duration: 4000,
+        });
         return;
       }
       setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
@@ -376,24 +412,43 @@ export function ChatPage() {
       }
     } catch (err) {
       if (!controller.signal.aborted) {
-        setError(`stream interrupted: ${(err as Error).message ?? "unknown error"}`);
+        const msg = `stream interrupted: ${(err as Error).message ?? "unknown error"}`;
+        setError(msg);
+        toast.addToast({
+          id: `chat-stream-err-${Date.now()}`,
+          title: "Stream interrupted",
+          description: msg,
+          tone: "warning",
+          duration: 4000,
+        });
       }
     } finally {
       abortRef.current = null;
-      setStreaming(false);
-      // Broadcast the final token count so the per-turn cost chip in
-      // the chat header can update (Tier 7 combo: cost router + chat).
-      setMessages((cur) => {
-        const last = cur[cur.length - 1];
-        if (last && last.role === "assistant") {
-          window.dispatchEvent(
-            new CustomEvent("helm:turn-tokens", {
-              detail: { tokens: last.tokens ?? 0 },
-            }),
-          );
-        }
-        return cur;
-      });
+      // Defer setting streaming=false until the minimum visible time
+      // so the typing dots always render at least once. Cache hits
+      // resolve in <50ms; without this, the dots never animate.
+      const remaining = streamMinUntilRef.current - Date.now();
+      const cleanup = () => {
+        setStreaming(false);
+        // Broadcast the final token count so the per-turn cost chip in
+        // the chat header can update (Tier 7 combo: cost router + chat).
+        setMessages((cur) => {
+          const last = cur[cur.length - 1];
+          if (last && last.role === "assistant") {
+            window.dispatchEvent(
+              new CustomEvent("helm:turn-tokens", {
+                detail: { tokens: last.tokens ?? 0 },
+              }),
+            );
+          }
+          return cur;
+        });
+      };
+      if (remaining > 0) {
+        setTimeout(cleanup, remaining);
+      } else {
+        cleanup();
+      }
     }
   }
 
@@ -409,14 +464,24 @@ export function ChatPage() {
         </div>
         {/* Harness pill row — P2 pluggable runtime selector. Shows the
             active harness and offers the configured ones as quick
-            switches. Selecting a harness re-routes every subsequent
+            switches. By default we hide unconfigured harnesses (mock
+            / pi / cli stubs) so the bar only shows real, usable
+            providers. A small toggle reveals the full list for
+            debugging. Selecting a harness re-routes every subsequent
             chat through that runtime on the backend. */}
         <div className="px-3 py-2 border-b border-borderSoft flex items-center gap-1.5 flex-wrap">
           <span className="mono-caps text-[10px] text-textFaint">harness</span>
           {harnesses.length === 0 && (
             <Badge tone="neutral">loading…</Badge>
           )}
-          {harnesses.map((h) => {
+          {harnesses
+            .filter((h) => {
+              // Mock is a fallback only — never user-selectable. The
+              // "show all" toggle is the only way to see it.
+              if (h.kind === "mock" && !showAllHarnesses) return false;
+              return showAllHarnesses || h.configured;
+            })
+            .map((h) => {
             const isActive = h.kind === harness;
             const tone = !h.configured
               ? "rust"
@@ -447,6 +512,19 @@ export function ChatPage() {
               </button>
             );
           })}
+          {harnesses.some((h) => !h.configured) && (
+            <button
+              type="button"
+              onClick={() => setShowAllHarnesses((v) => !v)}
+              title={showAllHarnesses ? "hide unconfigured" : "show unconfigured"}
+              className="inline-flex items-center px-1.5 h-[18px] border border-borderSoft text-textMuted hover:text-text"
+            >
+              <span className="mono-caps text-[10px]">
+                {showAllHarnesses ? "−" : "+"}
+                {harnesses.filter((h) => !h.configured).length}
+              </span>
+            </button>
+          )}
         </div>
         <div className="py-1">
           {models.map((m) => {
@@ -642,6 +720,15 @@ export function ChatPage() {
               className="flex-1 bg-panelAlt border border-border text-text px-3 py-2 font-mono text-[13px] resize-none focus:border-brass outline-none"
             />
             <Button
+              variant={refreshMode ? "secondary" : "ghost"}
+              onClick={() => setRefreshMode((v) => !v)}
+              disabled={streaming}
+              title={refreshMode ? "Next message bypasses cache" : "Click to bypass cache for next message"}
+              className="gap-1.5"
+            >
+              <RefreshIcon size={12} />
+            </Button>
+            <Button
               variant="primary"
               onClick={send}
               disabled={
@@ -659,6 +746,22 @@ export function ChatPage() {
               {streaming ? "Streaming" : "Send"}
             </Button>
           </div>
+          {/* In-flight "thinking" pill — appears above the composer
+              while the request is in flight. Visible for the full
+              min-stream window so the user sees activity even on a
+              cache hit that completes in <50ms. */}
+          {streaming && (
+            <div
+              className="mt-2 flex items-center gap-2 border border-brass/40 bg-brass/10 px-3 py-2 text-[12px] text-brass"
+              data-testid="thinking-pill"
+            >
+              <TypingDots size="sm" active />
+              <span className="mono-caps tracking-wider">thinking</span>
+              <span className="text-brass/60 ml-auto mono-caps text-[10px]">
+                waiting for response
+              </span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -810,9 +913,9 @@ function MessageBubble({
             {isAssistant ? "assistant" : "you"}
           </span>
           {stillStreaming && (
-            <span className="inline-flex items-center gap-1.5 mono-caps text-[10px] text-brass">
-              <TypingDots size="sm" />
-              thinking
+            <span className="inline-flex items-center gap-2 mono-caps text-[10px] text-brass bg-brass/10 px-2 py-1 border border-brass/40">
+              <TypingDots size="sm" active={!m.content} />
+              <span>{m.content ? "streaming" : "thinking"}</span>
             </span>
           )}
           {isAssistant && m.search && !stillStreaming && (
@@ -1069,7 +1172,15 @@ function FeedbackRow({
         duration: 2500,
       });
     } catch (err) {
-      setError((err as Error).message);
+      const msg = (err as Error).message;
+      setError(msg);
+      toast.addToast({
+        id: `chat-feedback-err-${messageId}`,
+        title: "Feedback failed",
+        description: msg,
+        tone: "warning",
+        duration: 3500,
+      });
     } finally {
       setSubmitting(false);
     }
@@ -1124,9 +1235,7 @@ function FeedbackRow({
           </span>
         )}
         {error && (
-          <span className="mono-caps text-[10px] text-rust tracking-wider">
-            {error}
-          </span>
+          <Badge tone="rust">{error}</Badge>
         )}
       </div>
       {askingReason && rating === null && (
@@ -1386,10 +1495,10 @@ function DocumentSheet({ open, onClose, onGenerated }: DocumentSheetProps) {
 
         <div className="px-3 py-2 border-b border-borderSoft flex items-center gap-2">
           <span className="mono-caps text-[10px] text-textFaint w-12">title</span>
-          <input
+          <Input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            className="flex-1 bg-panelAlt border border-border text-text px-2 py-1 font-mono text-[12px] outline-none focus:border-brass"
+            className="flex-1 py-1"
           />
           <select
             value={format}
@@ -1408,7 +1517,7 @@ function DocumentSheet({ open, onClose, onGenerated }: DocumentSheetProps) {
           <div className="mono-caps text-[10px] text-textFaint">sections</div>
           {sections.map((s, i) => (
             <div key={i} className="border border-borderSoft p-2 bg-panelAlt space-y-1">
-              <input
+              <Input
                 value={s.heading}
                 onChange={(e) =>
                   setSections((prev) =>
@@ -1416,7 +1525,7 @@ function DocumentSheet({ open, onClose, onGenerated }: DocumentSheetProps) {
                   )
                 }
                 placeholder="heading"
-                className="w-full bg-bg border border-border text-text px-2 py-1 font-mono text-[12px] outline-none"
+                className="w-full py-1"
               />
               <textarea
                 value={s.content}

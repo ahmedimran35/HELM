@@ -1,66 +1,94 @@
-// /health — latency-aware harness health (Tier 5).
+// /health — real-time reachability of every popular AI provider.
 //
-// Polls /api/health/harnesses every 30s. Each row shows the harness
-// label, current status (green/amber/red), last measured latency,
-// and a sparkline of the last few samples. A "refresh" button
-// forces a fresh probe.
+// Pings 14 hardcoded public provider endpoints (OpenAI, Anthropic,
+// Google Gemini, Mistral, Cohere, Groq, Together, OpenRouter,
+// Perplexity, DeepSeek, xAI, Hugging Face, Replicate, Fireworks)
+// every 30 seconds. No admin configuration required. No auth sent.
+//
+// Classification:
+//   2xx, 3xx, 4xx → "up" (401/403 still mean the service is reachable)
+//   5xx           → "degraded"
+//   timeout, DNS failure, refused → "down"
+//
+// Each card shows the provider name, status dot, latency, last-
+// checked timestamp, and a sparkline of the last 10 samples.
 
 import { useEffect, useState, useRef } from "react";
 import { apiGet } from "../api/client";
-import { EmptyState } from "../components/ui/feedback/EmptyState";
-import { StatusPill } from "../components/ui/feedback/StatusPill";
 import { Button } from "../components/ui/Button";
 import { Sparkline } from "../components/ui/data/charts";
-import { ActivityIcon, RefreshIcon } from "../components/ui/Icon";
+import { RefreshIcon } from "../components/ui/Icon";
+import { Skeleton } from "../components/ui/feedback/Skeleton";
 import { cn } from "../lib/cn";
 
-interface HarnessHealth {
-  kind: string;
-  status: "healthy" | "degraded" | "down" | "unknown";
+type Status = "up" | "degraded" | "down" | "unknown";
+
+interface PopularProviderHealth {
+  id: string;
+  name: string;
+  short: string;
+  url: string;
+  status: Status;
   latency_ms: number;
-  last_checked_at: number;
+  http_code: number;
+  checked_at: number;
   reason?: string;
 }
 
-interface HealthResponse {
-  harnesses: HarnessHealth[];
+interface Summary {
+  up: number;
+  degraded: number;
+  down: number;
+  unknown: number;
 }
 
-const STATUS_LABEL: Record<HarnessHealth["status"], string> = {
-  healthy: "healthy",
+interface HealthResponse {
+  providers: PopularProviderHealth[];
+  summary: Summary;
+  ts: number;
+}
+
+const STATUS_LABEL: Record<Status, string> = {
+  up: "up",
   degraded: "degraded",
   down: "down",
-  unknown: "not configured",
+  unknown: "checking…",
 };
 
-const STATUS_TONE: Record<HarnessHealth["status"], "teal" | "amber" | "rust" | "neutral"> = {
-  healthy: "teal",
+const STATUS_DOT: Record<Status, string> = {
+  up: "bg-teal",
+  degraded: "bg-amber",
+  down: "bg-rust",
+  unknown: "bg-textFaint",
+};
+
+const STATUS_TONE: Record<Status, "teal" | "amber" | "rust" | "neutral"> = {
+  up: "teal",
   degraded: "amber",
   down: "rust",
   unknown: "neutral",
 };
 
 export function HealthPage() {
-  const [data, setData] = useState<HarnessHealth[] | null>(null);
-  // Sparkline history per harness — keeps the last ~10 samples.
+  const [data, setData] = useState<HealthResponse | null>(null);
   const historyRef = useRef<Map<string, number[]>>(new Map());
   const [, force] = useState(0);
 
   async function load(forceRefresh: boolean) {
     try {
       const q = forceRefresh ? "?refresh=1" : "";
-      const res = await apiGet<HealthResponse>(`/health/harnesses${q}`);
-      const rows = res.harnesses;
-      setData(rows);
-      for (const row of rows) {
-        const prev = historyRef.current.get(row.kind) ?? [];
+      const res = await apiGet<HealthResponse>(`/health/providers/popular${q}`);
+      setData(res);
+      const hist = historyRef.current;
+      for (const row of res.providers) {
+        const prev = hist.get(row.id) ?? [];
         prev.push(row.latency_ms);
         if (prev.length > 10) prev.shift();
-        historyRef.current.set(row.kind, prev);
+        hist.set(row.id, prev);
       }
       force((n) => n + 1);
     } catch {
-      setData([]);
+      setData(null);
     }
   }
 
@@ -70,41 +98,24 @@ export function HealthPage() {
     return () => clearInterval(id);
   }, []);
 
-  const allHealthy = data && data.every((r) => r.status === "healthy");
-  const anyDown = data && data.some((r) => r.status === "down");
+  const summary = data?.summary;
+  const allUp = summary && summary.up === summary.up + summary.degraded + summary.down + summary.unknown;
+  const anyDown = summary && summary.down > 0;
 
   return (
-    <div className="p-6 max-w-[900px] space-y-6">
+    <div className="p-6 max-w-[960px] space-y-6">
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
           <h2 className="font-display text-[24px] font-semibold text-text tracking-wide leading-tight">
-            Harness health
+            Provider health
           </h2>
           <p className="text-textMuted text-[13px] mt-1">
-            Per-harness latency + status, refreshed every 30s. Failover skips red rows.
+            Real-time reachability of every popular AI provider. No configuration required.
+            Refreshed every 30s. No auth is sent — a 401 still means the service is up.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <StatusPill
-            state={
-              data === null
-                ? "unknown"
-                : anyDown
-                ? "degraded"
-                : allHealthy
-                ? "healthy"
-                : "warming"
-            }
-            label={
-              data === null
-                ? "loading…"
-                : anyDown
-                ? "one or more harnesses down"
-                : allHealthy
-                ? "all harnesses healthy"
-                : "some harnesses degraded"
-            }
-          />
+        <div className="flex items-center gap-3">
+          <SummaryBar summary={summary} />
           <Button variant="ghost" onClick={() => void load(true)} title="force refresh">
             <RefreshIcon size={12} />
           </Button>
@@ -112,101 +123,107 @@ export function HealthPage() {
       </div>
 
       {data === null ? (
-        <div className="space-y-2">
-          {Array.from({ length: 4 }, (_, i) => (
-            <div key={i} className="border border-border bg-panel h-[68px]" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {Array.from({ length: 12 }, (_, i) => (
+            <Skeleton key={i} variant="block" height={112} />
           ))}
         </div>
-      ) : data.length === 0 ? (
-        <EmptyState
-          variant="gear"
-          title="No harnesses configured"
-          description="Add an OpenAI / Anthropic provider, then come back to see live health."
-          tone="neutral"
-        />
       ) : (
-        <section className="space-y-3">
-          {data.map((row) => (
-            <HarnessRow
-              key={row.kind}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {data.providers.map((row) => (
+            <ProviderCard
+              key={row.id}
               row={row}
-              history={historyRef.current.get(row.kind) ?? []}
+              history={historyRef.current.get(row.id) ?? []}
             />
           ))}
-        </section>
+        </div>
       )}
+
+      <p className="text-textFaint text-[11px] mono-caps">
+        {data
+          ? <>Last polled {new Date(data.ts).toLocaleTimeString()} · 14 providers · 30s cache</>
+          : <>Loading…</>}
+      </p>
     </div>
   );
 }
 
-function HarnessRow({ row, history }: { row: HarnessHealth; history: number[] }) {
+function SummaryBar({ summary }: { summary: Summary | undefined }) {
+  if (!summary) return null;
+  const total = summary.up + summary.degraded + summary.down + summary.unknown;
+  return (
+    <div className="flex items-center gap-2 mono-caps text-[10px]">
+      <Pill count={summary.up} label="up" tone="teal" />
+      <Pill count={summary.degraded} label="degraded" tone="amber" />
+      <Pill count={summary.down} label="down" tone="rust" />
+      <span className="text-textFaint">/{ total }</span>
+    </div>
+  );
+}
+
+function Pill({ count, label, tone }: { count: number; label: string; tone: "teal" | "amber" | "rust" }) {
+  const cls = tone === "teal"
+    ? "border-teal/40 text-teal"
+    : tone === "amber"
+    ? "border-amber/40 text-amber"
+    : "border-rust/40 text-rust";
+  return (
+    <span className={cn("border px-1.5 h-[18px] inline-flex items-center gap-1", cls)}>
+      <span className="font-mono">{count}</span>
+      <span>{label}</span>
+    </span>
+  );
+}
+
+function ProviderCard({
+  row,
+  history,
+}: {
+  row: PopularProviderHealth;
+  history: number[];
+}) {
+  const dot = STATUS_DOT[row.status];
   const tone = STATUS_TONE[row.status];
-  const dot =
-    row.status === "healthy"
-      ? "bg-teal"
-      : row.status === "degraded"
-      ? "bg-amber"
-      : row.status === "down"
-      ? "bg-rust"
-      : "bg-textFaint";
+  const host = (() => {
+    try { return new URL(row.url).host; } catch { return row.url; }
+  })();
+  const reason = row.http_code > 0 ? `HTTP ${row.http_code}` : (row.reason ?? "—");
   return (
     <article className="border border-border bg-panel">
       <div className="px-4 py-3 flex items-center gap-3">
-        <span className={cn("w-2 h-2 rounded-full shrink-0", dot)} />
+        <div className="flex flex-col items-center gap-1 w-[34px] shrink-0">
+          <span className={cn("w-2.5 h-2.5 rounded-full", dot)} />
+          <span className="font-mono text-[10px] text-textFaint tracking-wider">{row.short}</span>
+        </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <ActivityIcon size={14} className="text-brass" />
-            <span className="font-mono text-[13px] text-text">{row.kind}</span>
-            <Badge tone={tone} small>
+            <span className="font-mono text-[13px] text-text truncate">{row.name}</span>
+            <span
+              className={cn(
+                "mono-caps text-[10px] border px-1.5 h-[16px] inline-flex items-center",
+                tone === "teal" && "border-teal/40 text-teal",
+                tone === "amber" && "border-amber/40 text-amber",
+                tone === "rust" && "border-rust/40 text-rust",
+                tone === "neutral" && "border-borderSoft text-textMuted",
+              )}
+            >
               {STATUS_LABEL[row.status]}
-            </Badge>
+            </span>
           </div>
-          <div className="mono-caps text-[10px] text-textFaint mt-0.5">
-            {row.latency_ms} ms · last checked{" "}
-            {new Date(row.last_checked_at).toLocaleTimeString()}
-            {row.reason ? ` · ${row.reason}` : ""}
+          <div className="mono-caps text-[10px] text-textFaint mt-0.5 truncate" title={row.url}>
+            {host} · {row.latency_ms}ms · {reason}
           </div>
         </div>
-        <div className="w-[160px] h-[36px] flex items-center">
+        <div className="w-[80px] h-[28px] flex items-center">
           <Sparkline
             values={history}
             tone={row.status === "down" ? "rust" : row.status === "degraded" ? "muted" : "teal"}
-            height={28}
-            width={160}
+            height={24}
+            width={80}
           />
         </div>
       </div>
     </article>
-  );
-}
-
-// Small inline Badge so we don't import the heavy one for one row.
-function Badge({
-  tone,
-  small,
-  children,
-}: {
-  tone: "teal" | "amber" | "rust" | "neutral";
-  small?: boolean;
-  children: React.ReactNode;
-}) {
-  const cls =
-    tone === "teal"
-      ? "border-teal/40 text-teal"
-      : tone === "amber"
-      ? "border-amber/40 text-amber"
-      : tone === "rust"
-      ? "border-rust/40 text-rust"
-      : "border-borderSoft text-textMuted";
-  return (
-    <span
-      className={cn(
-        "mono-caps tracking-wider border px-1.5 inline-flex items-center",
-        small ? "h-[16px] text-[10px]" : "h-[18px] text-[11px]",
-        cls,
-      )}
-    >
-      {children}
-    </span>
   );
 }

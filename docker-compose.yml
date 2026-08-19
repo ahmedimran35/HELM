@@ -19,11 +19,14 @@
 
 services:
   postgres:
+    # NOTE: dev-only default password "helm_dev". The prod overlay
+    # (docker-compose.prod.yml) requires POSTGRES_PASSWORD to be set
+    # via env and removes this default.
     image: postgres:16
     restart: unless-stopped
     environment:
       POSTGRES_USER: helm
-      POSTGRES_PASSWORD: helm_dev
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-helm_dev}
       POSTGRES_DB: helm
     volumes:
       - helm_pg:/var/lib/postgresql/data
@@ -34,13 +37,31 @@ services:
       retries: 10
 
   redis:
+    # NOTE: dev-only default password "helm_dev" matches the redis
+    # service's --requirepass below AND the REDIS_URL in the api env.
+    # To run in any non-local environment, set REDIS_PASSWORD in .env
+    # (the api service will fail to connect if this is overridden
+    # without also updating REDIS_URL).
     image: redis:7
     restart: unless-stopped
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --requirepass
+      - ${REDIS_PASSWORD:-helm_dev}
+      # bind to all interfaces inside the docker network so the api
+      # container can reach it; refuse external connections.
+      - --bind
+      - 0.0.0.0
+      - --protected-mode
+      - "yes"
     volumes:
       - helm_redis:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-helm_dev}", "--no-auth-warning", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -52,8 +73,12 @@ services:
   # The api container reaches it on the internal Docker network.
   # To use a remote Lightpanda instance instead, override LIGHTPANDA_BIN
   # and/or WEB_SEARCH_LIGHTPANDA_URL on the api service.
+  #
+  # Pinned to 0.3.7 (latest stable as of 2026-08-18). The upstream
+  # `:nightly` tag is a rolling build — never use it for reproducible
+  # deployments. Bump the version explicitly when upgrading.
   lightpanda:
-    image: lightpanda/browser:nightly
+    image: lightpanda/browser:0.3.7
     restart: unless-stopped
     # CDP server on 9222 (the default). To switch to CLI mode, set
     # LIGHTPANDA_BIN=lightpanda on api and remove the ports block.
@@ -76,11 +101,28 @@ services:
         condition: service_healthy
       lightpanda:
         condition: service_started
+    healthcheck:
+      # Deep probe: hits /api/health/deep, which verifies DB +
+      # harnesses in addition to the basic ping. Keeps compose's
+      # `service_healthy` signal aligned with what `/status` reports
+      # so `docker compose ps` and the admin panel agree.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health/deep"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     environment:
+      # -------------------------------------------------------------------------
+      # SECURITY: these defaults exist ONLY so a fresh clone boots with
+      # `docker compose up`. They MUST be overridden in any non-developer
+      # environment. The prod overlay (docker-compose.prod.yml) marks
+      # SESSION_SECRET, ADMIN_PASSWORD, and POSTGRES_PASSWORD as required
+      # (`:?` syntax) and refuses to start without them.
+      # -------------------------------------------------------------------------
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me-immediately}
-      DATABASE_URL: postgres://helm:helm_dev@postgres:5432/helm
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://helm:${POSTGRES_PASSWORD:-helm_dev}@postgres:5432/helm
+      REDIS_URL: redis://:${REDIS_PASSWORD:-helm_dev}@redis:6379/0
       SESSION_SECRET: ${SESSION_SECRET:-dev-only-do-not-use-in-prod-7d2c5f8a}
       API_PORT: "3000"
       WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:5173}

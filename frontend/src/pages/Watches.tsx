@@ -563,7 +563,14 @@ function WatchForm({
       });
       onSaved();
     } catch (err) {
-      setError((err as Error).message);
+      const msg = (err as Error).message;
+      setError(msg);
+      addToast({
+        id: `watch-save-err-${Date.now()}`,
+        title: mode === "create" ? "Create failed" : "Save failed",
+        description: msg,
+        tone: "warning",
+      });
     } finally {
       setSaving(false);
     }
@@ -707,10 +714,10 @@ function WatchForm({
 
       <div className="flex items-center gap-3">
         <Toggle on={enabled} onChange={setEnabled} />
-        <span className="mono-caps text-[10px] text-textMuted">{enabled ? "enabled" : "disabled"}</span>
+        <Badge tone="neutral">{enabled ? "enabled" : "disabled"}</Badge>
         <div className="ml-auto flex items-center gap-2">
           {error && (
-            <span className="mono-caps text-[10px] text-rust">{error}</span>
+            <Badge tone="rust">{error}</Badge>
           )}
           <Button variant="secondary" size="sm" onClick={onCancel} disabled={saving}>
             Cancel
@@ -879,7 +886,14 @@ function TriggerForm({
       });
       onSaved();
     } catch (err) {
-      setError((err as Error).message);
+      const msg = (err as Error).message;
+      setError(msg);
+      addToast({
+        id: `trigger-save-err-${Date.now()}`,
+        title: mode === "create" ? "Create failed" : "Save failed",
+        description: msg,
+        tone: "warning",
+      });
     } finally {
       setSaving(false);
     }
@@ -1006,10 +1020,10 @@ function TriggerForm({
 
       <div className="flex items-center gap-3">
         <Toggle on={enabled} onChange={setEnabled} />
-        <span className="mono-caps text-[10px] text-textMuted">{enabled ? "enabled" : "disabled"}</span>
+        <Badge tone="neutral">{enabled ? "enabled" : "disabled"}</Badge>
         <div className="ml-auto flex items-center gap-2">
           {error && (
-            <span className="mono-caps text-[10px] text-rust">{error}</span>
+            <Badge tone="rust">{error}</Badge>
           )}
           <Button variant="secondary" size="sm" onClick={onCancel} disabled={saving}>
             Cancel

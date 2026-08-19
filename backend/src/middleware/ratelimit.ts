@@ -6,6 +6,7 @@
 
 import type { MiddlewareHandler } from "hono";
 import { redisTake } from "./redis-limiter.ts";
+import { logSecurityEvent } from "../lib/security-events.ts";
 
 interface Bucket {
   count: number;
@@ -73,12 +74,14 @@ export function rateLimit(opts: {
 }): MiddlewareHandler {
   return async (c, next) => {
     let key: string;
+    let ipForEvent: string | undefined;
     if (opts.scope === "user") {
       const user = c.get("user");
       if (!user) return next();
       key = `u:${user.id}`;
     } else {
-      key = `i:${clientId(c)}`;
+      ipForEvent = clientId(c);
+      key = `i:${ipForEvent}`;
     }
     // Try Redis first (multi-process); fall back to in-memory if Redis
     // is unavailable or refuses the connection.
@@ -86,16 +89,43 @@ export function rateLimit(opts: {
     if (redisResult) {
       if (!redisResult.ok) {
         c.header("Retry-After", String(Math.ceil(redisResult.resetMs / 1000)));
+        emitRateLimitHit(c, opts, ipForEvent);
         return c.json({ error: "rate_limited" }, 429);
       }
       return next();
     }
     if (!take(key, opts.limit, opts.windowMs)) {
       c.header("Retry-After", String(Math.ceil(opts.windowMs / 1000)));
+      emitRateLimitHit(c, opts, ipForEvent);
       return c.json({ error: "rate_limited" }, 429);
     }
     return next();
   };
+}
+
+function emitRateLimitHit(
+  c: { req: { path: string; method: string } },
+  opts: { limit: number; windowMs: number; scope: string },
+  ip: string | undefined,
+): void {
+  // Fire-and-forget structured event. We don't await; the request
+  // path returns 429 immediately regardless. Errors are swallowed.
+  try {
+    logSecurityEvent({
+      type: "rate_limit_hit",
+      severity: "warn",
+      ip,
+      route: `${c.req.method} ${c.req.path}`,
+      details: {
+        scope: opts.scope,
+        limit: opts.limit,
+        window_ms: opts.windowMs,
+      },
+      ts: Date.now(),
+    });
+  } catch {
+    /* never block the 429 on logger failure */
+  }
 }
 
 /**
@@ -112,6 +142,7 @@ export function rateLimitByBody(opts: {
   windowMs: number;
   bodyKey: "username" | "panel_id";
   prefix: string;
+  scope: string;
 }): MiddlewareHandler {
   return async (c, next) => {
     let key: string;
@@ -130,12 +161,14 @@ export function rateLimitByBody(opts: {
     if (redisResult) {
       if (!redisResult.ok) {
         c.header("Retry-After", String(Math.ceil(redisResult.resetMs / 1000)));
+        emitRateLimitHit(c, opts, clientId(c));
         return c.json({ error: "rate_limited" }, 429);
       }
       return next();
     }
     if (!take(key, opts.limit, opts.windowMs)) {
       c.header("Retry-After", String(Math.ceil(opts.windowMs / 1000)));
+      emitRateLimitHit(c, opts, clientId(c));
       return c.json({ error: "rate_limited" }, 429);
     }
     return next();

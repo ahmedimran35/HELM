@@ -38,9 +38,28 @@ export function normaliseQuery(query: string): string {
     .trim();
 }
 
-/** sha256 hex digest of a string. */
-export function hashQuery(query: string): string {
-  return createHash("sha256").update(normaliseQuery(query)).digest("hex");
+/** Ownership scope baked into the cache key. A panel-scoped row is
+ *  keyed by `panel:<id>` so a different panel cannot resolve the same
+ *  query to the same cached reply (cross-panel leak). When `panelId`
+ *  is null the scope is `user:<userId>` so the 1:1 chat (which has no
+ *  panel) is scoped per-user instead of globally — otherwise two users
+ *  asking the same question would share a cached reply. */
+function cacheScope(panelId: string | null, userId: string | null): string {
+  if (panelId) return `panel:${panelId}`;
+  if (userId) return `user:${userId}`;
+  // Last-resort fallback. With both null we'd dedupe across every
+  // caller; we still namespace it so it can't collide with a scoped key.
+  return "global";
+}
+
+/** sha256 hex digest of (scope + normalised query). The scope prefix
+ *  is what stops cross-panel + cross-user leakage — the bare text
+ *  hash would collide for any caller that asks the same question. */
+export function hashQuery(query: string, panelId: string | null, userId: string | null): string {
+  const scope = cacheScope(panelId, userId);
+  return createHash("sha256")
+    .update(`${scope}\u0000${normaliseQuery(query)}`)
+    .digest("hex");
 }
 
 /** Look up a cached response. Returns null on a miss.
@@ -48,18 +67,19 @@ export function hashQuery(query: string): string {
 export async function lookupCached(
   query: string,
   panelId: string | null,
-  similarity_threshold: number = 0.92,
+  opts: { userId?: string | null; similarity_threshold?: number } = {},
 ): Promise<CachedResponse | null> {
-  const hash = hashQuery(query);
+  const hash = hashQuery(query, panelId, opts.userId ?? null);
   // The threshold is reserved for the future embedding path. For v1
   // we ignore it — every hash match is a hit, period.
-  void similarity_threshold;
+  void opts.similarity_threshold;
   const rows = await sql<CachedResponse[]>`
     SELECT id, query_text, response_text, model, hit_count,
            created_at::text AS created_at,
            last_hit_at::text AS last_hit_at
     FROM response_cache
     WHERE query_hash = ${hash}
+      AND expires_at > now()
     LIMIT 1
   `;
   const row = rows[0];
@@ -84,13 +104,25 @@ export async function storeCached(
   response: string,
   model: string,
   panelId: string | null,
+  opts: { userId?: string | null } = {},
 ): Promise<void> {
-  const hash = hashQuery(query);
+  const hash = hashQuery(query, panelId, opts.userId ?? null);
+  // TTL is env-driven so tests can disable it. Default 1 hour — long
+  // enough to suppress duplicate round-trips in a chat session, short
+  // enough that a freshly-rotated provider key actually gets exercised.
+  const ttlSec = (() => {
+    const raw = process.env.HELM_RESPONSE_CACHE_TTL_SECONDS;
+    if (raw === undefined || raw === "") return 3600;
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 3600;
+  })();
+  if (ttlSec === 0) return; // tests / ops disabled
   try {
     await sql`
-      INSERT INTO response_cache (query_hash, query_text, response_text, model, panel_id, hit_count)
-      VALUES (${hash}, ${query}, ${response}, ${model}, ${panelId}, 0)
-      ON CONFLICT (query_hash) DO NOTHING
+      INSERT INTO response_cache (query_hash, query_text, response_text, model, panel_id, hit_count, expires_at)
+      VALUES (${hash}, ${query}, ${response}, ${model}, ${panelId}, 0, now() + (${ttlSec}::int * interval '1 second'))
+      ON CONFLICT (query_hash) DO UPDATE
+        SET expires_at = EXCLUDED.expires_at
     `;
   } catch (err) {
     console.warn("[response-cache] store failed:", (err as Error).message);

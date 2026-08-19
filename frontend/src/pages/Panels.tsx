@@ -22,6 +22,7 @@ import { AvatarStack } from "../components/ui/data/AvatarStack";
 import { PresenceDot } from "../components/ui/data/PresenceDot";
 import { StatusPill } from "../components/ui/feedback/StatusPill";
 import { EmptyState } from "../components/ui/feedback/EmptyState";
+import { Skeleton } from "../components/ui/feedback/Skeleton";
 import { TypingDots } from "../components/ui/TypingDots";
 import { Markdown } from "../components/ui/Markdown";
 import { useToast } from "../components/ui/feedback/Toast";
@@ -133,10 +134,71 @@ interface Approval {
 
 type SettingsTab = "members" | "skills" | "knowledge" | "summary";
 
+/**
+ * Strict outbound frame validator. Mirrors the backend's hand-rolled
+ * schema in backend/src/ws.ts so we don't ship obviously malformed
+ * frames from a stuck component, stale closure, or hostile devtools
+ * paste. Returns the cleaned JSON string on success, null on failure.
+ */
+function buildOutboundFrame(input: unknown): string | null {
+  if (!input || typeof input !== "object") return null;
+  const obj = input as Record<string, unknown>;
+  const t = obj.type;
+  if (typeof t !== "string") return null;
+  switch (t) {
+    case "send": {
+      if (typeof obj.content !== "string" || obj.content.trim().length === 0) return null;
+      const out: Record<string, unknown> = {
+        type: "send",
+        content: String(obj.content),
+      };
+      if (typeof obj.mentioned_model_id === "string") {
+        out.mentioned_model_id = obj.mentioned_model_id;
+      }
+      if (typeof obj.force_web_search === "boolean") {
+        out.force_web_search = obj.force_web_search;
+      }
+      return JSON.stringify(out);
+    }
+    case "presence": {
+      const allowed = new Set(["viewing", "typing", "idle"]);
+      const status =
+        typeof obj.status === "string" && allowed.has(obj.status)
+          ? obj.status
+          : "viewing";
+      const out: Record<string, unknown> = { type: "presence", status };
+      if (typeof obj.cursor_block === "string") out.cursor_block = obj.cursor_block;
+      return JSON.stringify(out);
+    }
+    case "ping":
+      return JSON.stringify({ type: "ping" });
+    default:
+      return null;
+  }
+}
+
+/**
+ * Build the WS connect URL. The helm_sid session cookie is sent
+ * automatically by the browser for same-origin connections — the
+ * server reads it via parseSessionCookie during the upgrade. We still
+ * pin the URL to window.location.host so a future contributor can't
+ * turn this into a redirect-to-attacker by mistake.
+ */
+function buildPanelWsUrl(panelId: string): string | null {
+  if (typeof window === "undefined") return null;
+  if (!panelId || typeof panelId !== "string") return null;
+  // Reject anything but a UUID-shaped id so an accidentally-quoted or
+  // tampered id from a query string can't drive a path-traversal
+  // upgrade that the server would also reject, but cheaply and early.
+  if (!/^[0-9a-fA-F-]{36}$/.test(panelId)) return null;
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${window.location.host}/api/ws/panels/${panelId}`;
+}
+
 export function PanelsPage() {
   const { user } = useAuth();
   const { addToast } = useToast();
-  const [panels, setPanels] = useState<PanelSummary[]>([]);
+  const [panels, setPanels] = useState<PanelSummary[] | null>(null);
   const [active, setActive] = useState<string | null>(null);
   const [detail, setDetail] = useState<PanelDetail | null>(null);
   const [messages, setMessages] = useState<PanelMessage[]>([]);
@@ -199,6 +261,20 @@ export function PanelsPage() {
     return () => window.removeEventListener("helm:branch-created", handler);
   }, []);
 
+  // Pull the sidebar list once on mount. While the fetch is in flight
+  // we render a skeleton (see the panel-list branch below) so the left
+  // column doesn't pop in empty.
+  useEffect(() => {
+    let cancelled = false;
+    apiGet<PanelSummary[]>("/panels")
+      .then((list) => {
+        if (!cancelled) setPanels(list);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Late-joiner fetch: when the WS first opens we don't have any
   // presence_update frames yet, so pull the snapshot via REST so the
   // "X watching" pill is correct from frame 0.
@@ -237,10 +313,6 @@ export function PanelsPage() {
       clearInterval(timer);
     };
   }, [active]);
-
-  useEffect(() => {
-    apiGet<PanelSummary[]>("/panels").then(setPanels);
-  }, []);
 
   // Load detail + messages when active changes.
   useEffect(() => {
@@ -331,11 +403,26 @@ export function PanelsPage() {
 
   // WebSocket subscription while a panel is active.
   useEffect(() => {
-    if (!active) return;
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${proto}//${window.location.host}/api/ws/panels/${active}`;
+    if (!active || !user) return;
+    const url = buildPanelWsUrl(active);
+    if (!url) {
+      // Defensive: if the id fails validation, skip rather than open
+      // a socket the server would 403 on anyway.
+      return;
+    }
     const ws = new WebSocket(url);
     wsRef.current = ws;
+    // Server already authed us from the helm_sid cookie on upgrade
+    // (SameSite=Strict + __Host- prefix means only same-origin
+    // requests can ever attach it). Send a `ping` after open so we
+    // immediately verify round-trip reachability + keepalive cadence.
+    ws.onopen = () => {
+      try {
+        ws.send(JSON.stringify({ type: "ping" }));
+      } catch {
+        /* server still got our upgrade + auth; non-fatal */
+      }
+    };
     ws.onmessage = (ev) => {
       try {
         const msg = JSON.parse(String(ev.data));
@@ -478,12 +565,20 @@ export function PanelsPage() {
     const previousMentionId = mentionedModelId;
     setMentionedModelId(null);
     setLastPickedExternalId(null);
-    const frame: { type: string; content: string; mentioned_model_id?: string } = {
+    // Validate against the same schema the server enforces — never
+    // ship a frame that the server would silently drop.
+    const payload = buildOutboundFrame({
       type: "send",
       content,
-    };
-    if (previousMentionId) frame.mentioned_model_id = previousMentionId;
-    wsRef.current.send(JSON.stringify(frame));
+      ...(previousMentionId ? { mentioned_model_id: previousMentionId } : {}),
+    });
+    if (!payload) return;
+    if (wsRef.current.readyState !== WebSocket.OPEN) return;
+    try {
+      wsRef.current.send(payload);
+    } catch {
+      /* socket died between readyState check and send() — ignore */
+    }
     // Return focus to the textarea so the user can keep typing.
     setTimeout(() => inputRef.current?.focus(), 0);
   }
@@ -547,8 +642,14 @@ export function PanelsPage() {
             </Button>
           </div>
         )}
-        <div className="flex-1 overflow-y-auto py-1">
-          {panels.length === 0 && (
+        <div className="flex-1 overflow-y-auto py-1" aria-busy={panels === null ? "true" : undefined}>
+          {panels === null ? (
+            <div className="p-3 space-y-2" aria-busy="true">
+              {Array.from({ length: 6 }, (_, i) => (
+                <Skeleton key={i} variant="row" />
+              ))}
+            </div>
+          ) : panels.length === 0 ? (
             <div className="px-3 py-6 text-center">
               <div className="mono-caps text-[10px] text-textFaint">no panels</div>
               {isAdmin && (
@@ -557,30 +658,31 @@ export function PanelsPage() {
                 </div>
               )}
             </div>
+          ) : (
+            panels.map((p) => {
+              const isActive = p.id === active;
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => setActive(p.id)}
+                  className={`w-full text-left px-3 py-2 border-l-2 transition-colors ${
+                    isActive
+                      ? "border-brass bg-panelAlt text-text"
+                      : "border-transparent text-textMuted hover:bg-panelAlt/60 hover:text-text"
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <CallSign id={`PNL-${p.id.slice(0, 4).toUpperCase()}`} />
+                    <span className="font-mono text-[12px] truncate">{p.name}</span>
+                  </div>
+                  <div className="mt-1 flex items-center gap-3 mono-caps text-[10px] text-textFaint">
+                    <span>{p.member_count} mb</span>
+                    <span>{p.message_count} msg</span>
+                  </div>
+                </button>
+              );
+            })
           )}
-          {panels.map((p) => {
-            const isActive = p.id === active;
-            return (
-              <button
-                key={p.id}
-                onClick={() => setActive(p.id)}
-                className={`w-full text-left px-3 py-2 border-l-2 transition-colors ${
-                  isActive
-                    ? "border-brass bg-panelAlt text-text"
-                    : "border-transparent text-textMuted hover:bg-panelAlt/60 hover:text-text"
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <CallSign id={`PNL-${p.id.slice(0, 4).toUpperCase()}`} />
-                  <span className="font-mono text-[12px] truncate">{p.name}</span>
-                </div>
-                <div className="mt-1 flex items-center gap-3 mono-caps text-[10px] text-textFaint">
-                  <span>{p.member_count} mb</span>
-                  <span>{p.message_count} msg</span>
-                </div>
-              </button>
-            );
-          })}
         </div>
       </aside>
 
@@ -937,9 +1039,7 @@ export function PanelsPage() {
                   ⏎ send · ⇧⏎ newline · @ to mention a model
                 </span>
                 {mentionedModelId && !input.startsWith("@") && (
-                  <span className="mono-caps text-[10px] text-brass">
-                    → mentioned model selected
-                  </span>
+                  <Badge tone="brass">→ mentioned model selected</Badge>
                 )}
               </div>
             </div>
@@ -1421,9 +1521,7 @@ function MentionPicker({
     <div className="absolute bottom-full left-0 right-0 mb-2 z-20">
       <div className="bg-panel border border-brassSoft/60 shadow-2xl">
         <div className="px-4 py-2 border-b border-borderSoft bg-panelAlt flex items-center justify-between">
-          <span className="mono-caps text-[10px] text-brass">
-            Mention a model
-          </span>
+          <Badge tone="brass">Mention a model</Badge>
           <span className="mono-caps text-[10px] text-textFaint">
             ↑↓ pick · ↵ send · esc close
           </span>

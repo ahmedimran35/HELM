@@ -18,6 +18,7 @@
 
 import { sql } from "../db/client.ts";
 import { fireAlert } from "../lib/alerts.ts";
+import { logSecurityEvent } from "../lib/security-events.ts";
 
 const THRESHOLD = Number(process.env.HELM_LOGIN_LOCKOUT_THRESHOLD ?? 5);
 const DURATION_MINUTES = Number(process.env.HELM_LOGIN_LOCKOUT_MINUTES ?? 15);
@@ -50,7 +51,36 @@ export async function recordFailedLogin(
   const row = r[0];
   const locked = row?.locked_until != null && (row.locked_until as Date).getTime() > Date.now();
   const remainingMs = locked && row ? (row.locked_until as Date).getTime() - Date.now() : 0;
+  // Every failed login is a structured security event (warn). Even
+  // non-locking failures get recorded so a credential-stuffing pattern
+  // shows up in the log aggregator even before lockout fires.
+  logSecurityEvent({
+    type: "auth_failure",
+    severity: "warn",
+    userId,
+    ip: opts.ip,
+    route: "/api/login",
+    details: {
+      username: opts.username ?? "?",
+      failed_logins: row?.failed_logins ?? 0,
+      locked: locked ? "true" : "false",
+    },
+    ts: Date.now(),
+  });
   if (locked) {
+    logSecurityEvent({
+      type: "account_lockout",
+      severity: "critical",
+      userId,
+      ip: opts.ip,
+      route: "/api/login",
+      details: {
+        username: opts.username ?? "?",
+        failed_logins: row?.failed_logins ?? 0,
+        locked_for_seconds: Math.ceil(remainingMs / 1000),
+      },
+      ts: Date.now(),
+    });
     fireAlert({
       severity: "critical",
       title: `account locked: ${opts.username ?? userId}`,

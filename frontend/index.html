@@ -5,6 +5,35 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark" />
     <title>HELM</title>
+    <!--
+      Content-Security-Policy. The shell must:
+        - run the inline theme bootstrap in <head> (script-src 'unsafe-inline')
+        - load Google Fonts stylesheet (style-src https://fonts.googleapis.com)
+        - serve woff2 files from gstatic (font-src https://fonts.gstatic.com)
+        - talk to the API at /api/* and ws://… for live panels
+            (connect-src 'self' http://localhost:3000 ws://localhost:3000
+              — production must override to the real API/WS origin)
+        - never be embedded (frame-ancestors 'none')
+      DEFAULT API ORIGIN IS THE DEV ONE. Production must rebuild with
+      API_URL set so the meta tag ships the correct origin.
+
+      Two parallel policies:
+        * The strict Content-Security-Policy ENFORCES the rules.
+        * The Content-Security-Policy-Report-Only mirror REPORTS
+          violations to /api/csp-report without blocking. When we
+          roll out a new directive (e.g. tightening script-src to
+          drop 'unsafe-inline'), we can flip it from report-only to
+          enforced and watch the report stream for fallout BEFORE the
+          switch.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self' http://localhost:3000 ws://localhost:3000 wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; report-uri /api/csp-report;"
+    />
+    <meta
+      http-equiv="Content-Security-Policy-Report-Only"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self' http://localhost:3000 ws://localhost:3000 wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; report-uri /api/csp-report;"
+    />
     <!-- Inline theme bootstrap — runs BEFORE React mounts so the correct
          data-theme attribute is already on <html> for first paint. Without
          this, light-mode users see a flash of the dark default while the
@@ -15,9 +44,12 @@
           var saved = window.localStorage.getItem("helm.theme");
           var theme = saved === "light" || saved === "dark" ? saved : "light";
           document.documentElement.setAttribute("data-theme", theme);
+          // Clear any old A/B tester picks so the new defaults (warm-original
+          // light, slate dark) stick. Future A/B tests can re-introduce the
+          // helm.<theme>_bg localStorage key.
+          window.localStorage.removeItem("helm.light_bg");
+          window.localStorage.removeItem("helm.dark_bg");
         } catch (_) {
-          // localStorage may be unavailable (private mode, etc.); fall back
-          // to the CSS default by explicitly setting data-theme.
           document.documentElement.setAttribute("data-theme", "light");
         }
       })();
@@ -29,7 +61,7 @@
       rel="stylesheet"
     />
   </head>
-  <body class="font-body">
+<body class="font-body">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

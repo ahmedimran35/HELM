@@ -18,6 +18,7 @@
 // We build the URL from the current user scope (no panelId).
 
 import { useCallback, useEffect, useState } from "react";
+import { apiGet, apiPost } from "../../api/client";
 import { useToast } from "../ui/feedback/Toast";
 import { Button } from "../ui/Button";
 import { Skeleton } from "../ui/feedback/Skeleton";
@@ -71,9 +72,8 @@ export function BrowserAutomation({ panelId, open, onClose, onResult }: Props) {
 
   useEffect(() => {
     if (!open) return;
-    fetch("/api/browser/status", { credentials: "include" })
-      .then((r) => r.json())
-      .then((d: { available?: boolean }) => setAvailable(Boolean(d.available)))
+    apiGet<{ available?: boolean }>("/browser/status")
+      .then((d) => setAvailable(Boolean(d.available)))
       .catch(() => setAvailable(false));
   }, [open]);
 
@@ -111,21 +111,11 @@ export function BrowserAutomation({ panelId, open, onClose, onResult }: Props) {
     setRunning(true);
     setResult(null);
     try {
-      const res = await fetch("/api/browser/exec", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          url: url.trim(),
-          actions: actions.filter((a) => a.type !== "wait" || (a.ms && a.ms > 0)),
-          panel_id: panelId || undefined,
-        }),
+      const data = await apiPost<BrowserResult>("/browser/exec", {
+        url: url.trim(),
+        actions: actions.filter((a) => a.type !== "wait" || (a.ms && a.ms > 0)),
+        panel_id: panelId || undefined,
       });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || `browser exec failed (${res.status})`);
-      }
-      const data = (await res.json()) as BrowserResult;
       setResult(data);
       onResult?.(data, url.trim());
       if (data.stub) {

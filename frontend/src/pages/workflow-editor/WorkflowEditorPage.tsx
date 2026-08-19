@@ -17,6 +17,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { apiGet, apiPatch, apiPost } from "../../api/client";
 import { useToast } from "../../components/ui/feedback/Toast";
 import { XIcon } from "../../components/ui/Icon";
+import { Badge } from "../../components/ui/Badge";
 import { NODE_KIND_META, PALETTE_CATEGORIES } from "./constants";
 import { nid, eid } from "./helpers";
 import { Canvas } from "./Canvas";
@@ -84,6 +85,18 @@ export function WorkflowEditorPage() {
 
   // ---- Load ----------------------------------------------------------------
 
+  // Serialize only the fields the backend persists. Used for equality checks
+  // to detect whether a save is a no-op (which we skip to avoid round-trips)
+  // and to detect when a stale in-flight save is about to clobber newer state.
+  function serializeWorkflow(w: Workflow): string {
+    return JSON.stringify({
+      name: w.name,
+      description: w.description,
+      graph: w.graph,
+      enabled: w.enabled,
+    });
+  }
+
   const load = useCallback(async () => {
     if (!id) return;
     setLoading(true);
@@ -93,6 +106,10 @@ export function WorkflowEditorPage() {
       setPollRun(wf.runs?.[0] ?? null);
       setPollActive(wf.runs?.[0]?.status === "running");
       setDirty(false);
+      // The server's response is the new baseline for change detection, so
+      // an autosave right after load isn't a no-op trip but also doesn't
+      // fire just because the ref differs.
+      lastSavedSerializedRef.current = serializeWorkflow(wf);
       undoStack.current = [];
       forceRender((n) => n + 1);
     } catch (err) {
@@ -177,50 +194,113 @@ export function WorkflowEditorPage() {
 
   // Auto-save (debounced) reads the latest workflow from the ref so it
   // never uses a stale closure value.
+  //
+  // Race-safety: PATCHes are serialized through a single in-flight Promise
+  // (`saveInFlightRef`). If a new save arrives while one is in flight, we
+  // wait for the in-flight one to settle, then re-serialize from the live
+  // ref and save again. This prevents a slow save of state S1 from
+  // landing after a faster save of state S3 and clobbering it — every
+  // iteration writes the freshest state known to the client.
+  //
+  // `lastSavedSerializedRef` lets us skip no-op saves (the user made
+  // changes that were undone, or only flipped transient UI state) and
+  // double-check that a queued save hasn't already been covered.
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  function scheduleAutoSave() {
-    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
-    autoSaveTimer.current = setTimeout(() => {
-      autoSaveTimer.current = null;
-      const w = latestWorkflowRef.current;
-      if (!w) return;
-      apiPatch(`/workflows/${w.id}`, {
+  const lastSavedSerializedRef = useRef<string | null>(null);
+  const saveInFlightRef = useRef<Promise<void> | null>(null);
+
+  async function runSaveOnce(serialized: string): Promise<void> {
+    const w = latestWorkflowRef.current;
+    if (!w) return;
+    // Claim this snapshot before awaiting the network so the drain loop
+    // doesn't schedule the same snapshot twice in a race.
+    lastSavedSerializedRef.current = serialized;
+    try {
+      await apiPatch(`/workflows/${w.id}`, {
         name: w.name,
         description: w.description,
         graph: w.graph,
         enabled: w.enabled,
-      })
-        .then(() => {
-          setDirty(false);
-          setLastSaveAt(new Date().toISOString());
-          // Brief, low-noise confirmation.
-          addToast({
-            id: `wf-autosave-${Date.now()}`,
-            title: "Auto-saved",
-            tone: "info",
-            duration: 1200,
-          });
-        })
-        .catch((err) => {
-          addToast({
-            id: `wf-autosave-err-${Date.now()}`,
-            title: "Auto-save failed",
-            description: (err as Error).message,
-            tone: "warning",
-          });
-        });
-    }, 300);
+      });
+      setDirty(false);
+      setLastSaveAt(new Date().toISOString());
+      addToast({
+        id: `wf-autosave-${Date.now()}`,
+        title: "Auto-saved",
+        tone: "info",
+        duration: 1200,
+      });
+    } catch (err) {
+      addToast({
+        id: `wf-autosave-err-${Date.now()}`,
+        title: "Auto-save failed",
+        description: (err as Error).message,
+        tone: "warning",
+      });
+    }
+  }
+
+  async function drainSaves(): Promise<void> {
+    // Loop until the live state matches what we last persisted (or
+    // persisted+in-flight), bounded so a pathological edit storm can't
+    // pin the loop forever.
+    for (let i = 0; i < 8; i++) {
+      const inflight = saveInFlightRef.current;
+      if (inflight) {
+        try {
+          await inflight;
+        } catch {
+          /* surfaced via toast in runSaveOnce */
+        }
+      }
+      const w = latestWorkflowRef.current;
+      if (!w) return;
+      const serialized = serializeWorkflow(w);
+      if (serialized === lastSavedSerializedRef.current) return;
+      const p = runSaveOnce(serialized).finally(() => {
+        if (saveInFlightRef.current === p) saveInFlightRef.current = null;
+      });
+      saveInFlightRef.current = p;
+      await p;
+    }
+  }
+
+  function scheduleAutoSave() {
+    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+    autoSaveTimer.current = setTimeout(() => {
+      autoSaveTimer.current = null;
+      void drainSaves();
+    }, 500);
   }
 
   async function save() {
-    if (!workflow) return;
+    const w = latestWorkflowRef.current;
+    if (!w) return;
     setSaving(true);
+    // Cancel any pending debounced autosave so it doesn't fire a redundant
+    // PATCH immediately after our manual one.
+    if (autoSaveTimer.current) {
+      clearTimeout(autoSaveTimer.current);
+      autoSaveTimer.current = null;
+    }
+    // Wait for an in-flight autosave to land first so our manual save
+    // can't race against a stale snapshot.
+    const inflight = saveInFlightRef.current;
+    if (inflight) {
+      try {
+        await inflight;
+      } catch {
+        /* surfaced via toast */
+      }
+    }
+    const serialized = serializeWorkflow(w);
+    lastSavedSerializedRef.current = serialized;
     try {
-      await apiPatch(`/workflows/${workflow.id}`, {
-        name: workflow.name,
-        description: workflow.description,
-        graph: workflow.graph,
-        enabled: workflow.enabled,
+      await apiPatch(`/workflows/${w.id}`, {
+        name: w.name,
+        description: w.description,
+        graph: w.graph,
+        enabled: w.enabled,
       });
       setDirty(false);
       setLastSaveAt(new Date().toISOString());
@@ -624,9 +704,7 @@ function AddNodePopupInline({ onPick, onClose }: { onPick: (k: NodeKind) => void
       onClick={(e) => e.stopPropagation()}
     >
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
-        <span className="mono-caps text-[10px] text-brass tracking-wider">
-          Add node
-        </span>
+        <Badge tone="brass">Add node</Badge>
         <button
           type="button"
           onClick={onClose}

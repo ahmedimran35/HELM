@@ -447,10 +447,10 @@ function UsersTab() {
             one-time password generated automatically · share out-of-band
           </span>
           {error && (
-            <span className="mono-caps text-[10px] text-rust">{error}</span>
+            <Badge tone="rust">{error}</Badge>
           )}
           {success && !generated && (
-            <span className="mono-caps text-[10px] text-teal">{success}</span>
+            <Badge tone="teal">{success}</Badge>
           )}
         </div>
         {generated && (
@@ -519,7 +519,7 @@ function UsersTab() {
                       <div className="flex-1">
                         <div className="font-mono text-[13px] text-text">
                           {u.name} <span className="text-textMuted">({u.username})</span>
-                          {isSelf && <span className="ml-2 mono-caps text-[10px] text-brass">you</span>}
+                          {isSelf && <Badge tone="brass">you</Badge>}
                         </div>
                         <div className="mono-caps text-[10px] text-textMuted">
                           {u.role} · {u.is_active ? "active" : "disabled"} ·{" "}
@@ -1296,11 +1296,11 @@ function PreferencesPanel() {
               <div className="mono-caps text-[10px] text-textMuted mb-1">
                 dislikes (comma-separated phrases)
               </div>
-              <input
+              <Input
                 value={dislikesText}
                 onChange={(e) => setDislikesText(e.target.value)}
                 placeholder="emoji, code blocks, long preamble"
-                className="w-full bg-bg border border-border text-text px-2 py-1 font-mono text-[12px] outline-none focus:border-brass"
+                className="w-full py-1"
               />
             </div>
             <div className="flex items-center gap-2">
@@ -1503,8 +1503,8 @@ function WebSearchAdminTab() {
           >
             Save provider
           </Button>
-          {success && <span className="mono-caps text-[10px] text-teal">{success}</span>}
-          {error && <span className="mono-caps text-[10px] text-rust">{error}</span>}
+          {success && <Badge tone="teal">{success}</Badge>}
+          {error && <Badge tone="rust">{error}</Badge>}
         </div>
         <div className="mt-3 mono-caps text-[10px] text-textFaint">
           Recommended: <span className="text-brass">lightpanda</span> (self-host) for orgs,{" "}

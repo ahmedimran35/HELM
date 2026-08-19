@@ -26,6 +26,7 @@ import { isHarnessKind } from "../harness/types.ts";
 import { BUNDLES_ROOT, transformAppHtml } from "./apps-bundles.ts";
 import { join } from "node:path";
 import { mkdir, rm } from "node:fs/promises";
+import { safeError } from "../lib/safe-error.ts";
 
 const router = new Hono();
 router.use("*", requireAuth);
@@ -377,7 +378,7 @@ router.post("/generate", requireAdmin, async (c) => {
     }
   } catch (err) {
     console.warn("[apps.generate] harness.chat failed:", (err as Error).message);
-    return c.json({ error: "model_error", detail: (err as Error).message }, 502);
+    return safeError(c, err, { status: 502, code: "model_error", publicMessage: "Model error" });
   }
 
   const parsed = extractJsonObject(assembled);

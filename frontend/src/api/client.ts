@@ -24,13 +24,26 @@ export async function api<T = unknown>(
   path: string,
   init: RequestInit = {},
 ): Promise<T> {
+  // Don't set Content-Type when the caller passes FormData (multipart
+  // uploads); the browser must set the boundary itself. Also skip the
+  // default JSON Content-Type when the caller explicitly passes a body
+  // of type ReadableStream / Blob / FormData via init.body.
+  const isMultipart =
+    typeof FormData !== "undefined" && init.body instanceof FormData;
+  const isStream =
+    typeof ReadableStream !== "undefined" && init.body instanceof ReadableStream;
+  const isBlob = typeof Blob !== "undefined" && init.body instanceof Blob;
+  const baseHeaders: Record<string, string> = isMultipart || isStream || isBlob
+    ? {}
+    : { "Content-Type": "application/json" };
+  const headers: Record<string, string> = {
+    ...baseHeaders,
+    ...((init.headers as Record<string, string> | undefined) ?? {}),
+  };
   const res = await fetch(`/api${path}`, {
     ...init,
     credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init.headers ?? {}),
-    },
+    headers,
   });
   const text = await res.text();
   let body: unknown = null;

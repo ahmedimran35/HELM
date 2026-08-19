@@ -31,6 +31,7 @@
 
 import { spawn } from "bun";
 import { config } from "../config.ts";
+import { safeFetch, SafeFetchError } from "./safe-fetch.ts";
 
 export interface LightpandaResult {
   url: string;
@@ -115,7 +116,12 @@ export async function lightpandaFetchViaCli(
 /** HTTP fetch via a configured long-running daemon. We hit
     `<baseUrl>/fetch?url=<target>` which the wrapper daemon (e.g. a
     small Express server in front of `lightpanda serve`) is expected
-    to expose. We keep the same return shape as the CLI path. */
+    to expose. We keep the same return shape as the CLI path.
+    The baseUrl is configured in the env / config and treated as a
+    trusted internal daemon — pass `allowLocal: true` so a local
+    loopback binding is accepted. The actual `url` argument is
+    validated when the daemon forwards the fetch (or via the same
+    safeFetch check if we later implement client-side validation). */
 export async function lightpandaFetchViaHttp(
   baseUrl: string,
   url: string,
@@ -123,9 +129,17 @@ export async function lightpandaFetchViaHttp(
 ): Promise<LightpandaResult> {
   const start = Date.now();
   const timeoutMs = opts.timeoutMs ?? 20000;
-  const r = await fetch(`${baseUrl.replace(/\/$/, "")}/fetch?url=${encodeURIComponent(url)}`, {
-    signal: AbortSignal.timeout(timeoutMs),
-  });
+  // safeFetch with allowLocal: true — the lightpanda daemon is
+  // explicitly a trusted internal companion. The strict URL checks
+  // for DNS rebinding, embedded credentials, and numeric-IP encoding
+  // still apply.
+  const r = await safeFetch(
+    `${baseUrl.replace(/\/$/, "")}/fetch?url=${encodeURIComponent(url)}`,
+    {
+      signal: AbortSignal.timeout(timeoutMs),
+      allowLocal: true,
+    },
+  );
   const duration_ms = Date.now() - start;
   if (!r.ok) {
     throw new Error(`lightpanda daemon ${r.status}: ${(await r.text()).slice(0, 200)}`);
@@ -457,19 +471,32 @@ export async function lightpandaSearchWithTopPage(
 
 // ----------------------------------------------------------------- HTML
 
-/** Plain HTTP fetch with a sane timeout. No lightpanda required. */
+/** Plain HTTP fetch with a sane timeout. No lightpanda required.
+ *  Uses safeFetch so user-driven URLs (search-engine pages derived
+ *  from a chat question) are SSRF-guarded: private/loopback/metadata
+ *  IPs are rejected, redirects are not followed, and the body is
+ *  capped. The default port allowlist (80/443) is intentionally
+ *  strict. */
 async function plainFetch(url: string, timeoutMs = 15_000): Promise<string> {
-  const r = await fetch(url, {
-    signal: AbortSignal.timeout(timeoutMs),
-    headers: {
-      // Pretend to be a normal browser. Some engines (Brave) block
-      // requests with the default Bun/Node UA.
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-      "Accept-Language": "en-US,en;q=0.9",
-    },
-  });
+  let r: Response;
+  try {
+    r = await safeFetch(url, {
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: {
+        // Pretend to be a normal browser. Some engines (Brave) block
+        // requests with the default Bun/Node UA.
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
+          "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+    });
+  } catch (err) {
+    if (err instanceof SafeFetchError) {
+      throw new Error(`safe_fetch_blocked: ${err.message}`);
+    }
+    throw err;
+  }
   if (!r.ok) throw new Error(`fetch ${url} → ${r.status}`);
   return r.text();
 }
@@ -553,12 +580,15 @@ function extractBraveAnswerBoxFromHTML(html: string): string | null {
 
 /** Wikipedia REST API fallback for "who is X" / "what is X" queries.
  *  Two-step: opensearch to find the article, then summary endpoint to
- *  get the intro. Free, no key, no rate limit. */
+ *  get the intro. Free, no key, no rate limit. Uses safeFetch so the
+ *  endpoint can't be spoofed into talking to a private IP via DNS
+ *  rebinding, even though the URL is constructed from a constant
+ *  template + URL-encoded query string. */
 async function wikipediaFastPath(
   query: string,
 ): Promise<{ title: string; url: string; extract: string } | null> {
   const searchUrl = `https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(query)}&limit=1&format=json`;
-  const sr = await fetch(searchUrl, { signal: AbortSignal.timeout(10_000) });
+  const sr = await safeFetch(searchUrl, { signal: AbortSignal.timeout(10_000) });
   if (!sr.ok) return null;
   const data = (await sr.json()) as [string, string[], string[], string[]];
   const titles = data[1];
@@ -566,7 +596,7 @@ async function wikipediaFastPath(
   const title = titles[0]!;
   const articleUrl = `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, "_"))}`;
   const sumUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title.replace(/ /g, "_"))}`;
-  const sumR = await fetch(sumUrl, { signal: AbortSignal.timeout(10_000) });
+  const sumR = await safeFetch(sumUrl, { signal: AbortSignal.timeout(10_000) });
   if (!sumR.ok) return null;
   const sumData = (await sumR.json()) as {
     title?: string;

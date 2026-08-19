@@ -24,6 +24,30 @@ services:
     # POSTGRES_PASSWORD is unset.
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    # ---------------------------------------------------------------
+    # TLS: enable ssl=on so the api can connect with sslmode=require.
+    # This requires a cert + key on disk. To activate TLS:
+    #   1. Place server.crt and server.key in ./secrets/postgres/
+    #   2. Uncomment the `command:` and `volumes:` blocks below.
+    #   3. Update DATABASE_URL in the api service to:
+    #        postgres://helm:${POSTGRES_PASSWORD}@postgres:5432/helm?sslmode=require
+    # Until then, postgres listens in plaintext and the api connects
+    # plaintext. The traffic still stays inside the docker network,
+    # but for any non-localhost deployment, TLS termination via a
+    # sidecar (e.g., sslh, stunnel) or a real TLS reverse proxy is
+    # STRONGLY recommended. See HARDENING.md §3.
+    # ---------------------------------------------------------------
+    # command:
+    #   - postgres
+    #   - -c
+    #   - ssl=on
+    #   - -c
+    #   - ssl_cert_file=/etc/ssl/postgres/server.crt
+    #   - -c
+    #   - ssl_key_file=/etc/ssl/postgres/server.key
+    # volumes:
+    #   - ./secrets/postgres/server.crt:/etc/ssl/postgres/server.crt:ro
+    #   - ./secrets/postgres/server.key:/etc/ssl/postgres/server.key:ro
     # Read-only root, tmpfs for writable paths, drop all caps, no
     # new privileges. (See HARDENING.md §1.)
     read_only: true

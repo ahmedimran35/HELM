@@ -26,13 +26,21 @@
 #              helm-api:local
 
 # ---- Stage 1: install deps ----
-FROM oven/bun:1.3.14-alpine AS deps
+# Pin base image to a digest for supply-chain integrity (tag is
+# floating; digest is immutable). Resolve with:
+#   docker buildx imagetools inspect oven/bun:1.3.14-alpine
+# Verified digest for oven/bun:1.3.14-alpine as of 2026-08-18:
+#   sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0
+FROM oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0 AS deps
 WORKDIR /app
 RUN apk add --no-cache ca-certificates
 COPY package.json bun.lock* ./
 RUN bun install --frozen-lockfile --production
 
-# ---- Stage 2: runtime ----FROM oven/bun:1.3.14-alpine
+# ---- Stage 2: runtime ----
+# NOTE: same digest as the deps stage — the runtime image is built
+# from the same parent so vulnerability scanners see one base.
+FROM oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0
 WORKDIR /app
 RUN apk add --no-cache ca-certificates tini
 

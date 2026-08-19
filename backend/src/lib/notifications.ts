@@ -24,6 +24,12 @@
 // Idempotent tick: each notification has a `dedup_key` derived from
 // (user_id, kind, source_ref). We compute it cheaply and only INSERT
 // if no row in the last DEDUP_MS window already has the same key.
+//
+// The `dedup_key` column was added in migration 0017_dedup_key.sql;
+// without it the SELECT/INSERT below would fail with
+//   "column \"dedup_key\" does not exist"
+// on every tick. The index `notifications_dedup_idx` (also from 0017)
+// keeps the dedup lookup an index scan as the table grows.
 
 import { sql } from "../db/client.ts";
 
@@ -96,15 +102,66 @@ async function insertNotification(input: InsertNotificationInput): Promise<boole
 async function tick(): Promise<void> {
   if (schedulerRunning) return;
   schedulerRunning = true;
+  const tickStartedAt = Date.now();
+  // Structured log line so an operator can correlate silence on the
+  // notifications inbox with whatever this tick emitted. The shape is:
+  //   [notifications] tick started ts=… jobs=4
+  console.log(
+    `[notifications] tick started ts=${new Date(tickStartedAt).toISOString()}`,
+  );
   try {
-    await runBudgetAlerts();
-    await runStaleApprovals();
-    await runSummaryDue();
-    await runMentions();
+    // Each job is wrapped in its own try/catch so a single broken job
+    // (e.g. transient DB blip on spend_caps) doesn't suppress the
+    // other notifications that tick still wants to emit. The outer
+    // catch handles scheduler-level failures.
+    await safeRun("budget_alerts", runBudgetAlerts);
+    await safeRun("stale_approvals", runStaleApprovals);
+    await safeRun("summary_due", runSummaryDue);
+    await safeRun("mentions", runMentions);
   } catch (err) {
+    // Top-level tick failure — the per-job safeRun() catches job
+    // errors so we only land here on truly unexpected scheduler bugs
+    // (e.g. an out-of-memory killing a job). Surface the full error so
+    // operators can triage.
     console.warn("[notifications] tick failed:", (err as Error).message);
   } finally {
     schedulerRunning = false;
+    const elapsedMs = Date.now() - tickStartedAt;
+    // Emit a closing line whether the tick succeeded or partially
+    // failed — silent ticks (no log lines at all) used to be the
+    // hardest thing to diagnose because there was no heartbeat to
+    // assert against. The structured shape keeps this greppable.
+    console.log(
+      `[notifications] tick finished ms=${elapsedMs}`,
+    );
+  }
+}
+
+/** Run a single notification job, logging the failure server-side but
+ *  never throwing — silent scheduler failures used to disappear into
+ *  the void, which made "I didn't get a budget alert" tickets
+ *  impossible to triage. The structured log line includes the job
+ *  name, duration, and error so each failure has its own auditable
+ *  record. */
+async function safeRun(name: string, fn: () => Promise<void>): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    await fn();
+    const elapsedMs = Date.now() - startedAt;
+    // Log success too — when "did the budget_alerts job run last
+    // hour?" is asked, the answer should be one grep away.
+    console.log(`[notifications] job ${name} ok ms=${elapsedMs}`);
+  } catch (err) {
+    const elapsedMs = Date.now() - startedAt;
+    const message = (err as Error).message;
+    const stack = (err as Error).stack ?? "";
+    console.warn(
+      `[notifications] job ${name} failed ms=${elapsedMs} message=${JSON.stringify(message)}`,
+    );
+    // Print the first few stack frames so the failure is traceable
+    // without dumping the whole tree into the log.
+    const head = stack.split("\n").slice(0, 4).join(" | ");
+    if (head) console.warn(`[notifications] job ${name} stack=${head}`);
   }
 }
 

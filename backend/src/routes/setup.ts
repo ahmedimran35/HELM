@@ -235,7 +235,7 @@ router.post("/complete", async (c) => {
     if (msg.includes("users_username_key")) {
       return c.json({ error: "username_taken", field: "admin.username" }, 409);
     }
-    return c.json({ error: `setup_failed: ${msg}` }, 500);
+    return safeError(c, err, { status: 500, code: "setup_failed", publicMessage: "Setup failed" });
   }
 
   // Post-commit seeders run outside the transaction (they no-op when

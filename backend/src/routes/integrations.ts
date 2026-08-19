@@ -138,7 +138,8 @@ router.post("/:id/test", requireAdmin, async (c) => {
     }
   } catch (err) {
     result = "failed";
-    error = (err as Error).message;
+    console.warn("[integrations] webhook test failed:", (err as Error).message);
+    error = "request_failed";
   }
   await logAudit({
     userId: c.get("user").id,

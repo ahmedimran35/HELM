@@ -5,7 +5,8 @@
 
 import type { MiddlewareHandler } from "hono";
 import { config } from "../config.ts";
-import { findSession, loadUserForSession, touchSession } from "../auth/session.ts";
+import { findSession, loadUserForSession, revokeSession, touchSession } from "../auth/session.ts";
+import { logAudit } from "../lib/audit.ts";
 import type { UserRow } from "../auth/session.ts";
 
 declare module "hono" {
@@ -14,6 +15,15 @@ declare module "hono" {
     sessionId: string;
   }
 }
+
+// Feature flag: IP-bind hijack detection. When `HELM_SESSION_IP_BIND=1`,
+// the middleware compares req.ip to the session's `last_seen_ip`; a
+// mismatch is treated as a likely cookie theft and the session is
+// revoked. Default OFF so dev workflows that hop between WiFi, VPN,
+// and 4G (where the IP changes legitimately every few minutes) don't
+// get constant re-logins. Turn it on for any tenant that needs
+// step-up auth on cookie replay.
+const IP_BIND_ENABLED = process.env.HELM_SESSION_IP_BIND === "1";
 
 export const requireAuth: MiddlewareHandler = async (c, next) => {
   const cookie = c.req.header("cookie") ?? "";
@@ -24,6 +34,32 @@ export const requireAuth: MiddlewareHandler = async (c, next) => {
   const session = await findSession(sessionId);
   if (!session) {
     return c.json({ error: "session_expired" }, 401);
+  }
+  // IP-bind hijack check. Compare req.ip against the session's last
+  // seen IP. last_seen_ip may be NULL for sessions that pre-date the
+  // 0013 migration — treat NULL as "unknown" and set it on this
+  // request without flagging a mismatch.
+  if (IP_BIND_ENABLED) {
+    const reqIp = (c.req.header("x-forwarded-for")?.split(",")[0]?.trim()
+      ?? c.req.header("x-real-ip")
+      ?? null);
+    const lastIp = session.last_seen_ip ?? session.ip ?? null;
+    if (reqIp && lastIp && reqIp !== lastIp) {
+      // Cookie replay from a different network. Revoke the session,
+      // log a security_event, and force a re-login.
+      await revokeSession(sessionId);
+      await logAudit({
+        userId: session.user_id,
+        target: sessionId,
+        action: "session_hijack_suspect",
+        metadata: {
+          last_seen_ip: lastIp,
+          current_ip: reqIp,
+          path: c.req.path,
+        },
+      });
+      return c.json({ error: "session_ip_changed", reason: "ip_mismatch" }, 401);
+    }
   }
   const user = await loadUserForSession(sessionId);
   if (!user) {
@@ -37,7 +73,10 @@ export const requireAuth: MiddlewareHandler = async (c, next) => {
 
   // Record this section visit for the §2.7 Sessions tab.
   const section = c.req.path.replace(/^\/api\//, "").split("/")[0] ?? "root";
-  await touchSession(sessionId, section);
+  const reqIpForTouch = (c.req.header("x-forwarded-for")?.split(",")[0]?.trim()
+    ?? c.req.header("x-real-ip")
+    ?? null);
+  await touchSession(sessionId, section, { ip: reqIpForTouch });
 
   return next();
 };

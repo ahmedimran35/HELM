@@ -213,7 +213,11 @@ async function executeBody(
     await walk(entry, ctx);
   } catch (err) {
     status = "failed";
-    errorMessage = (err as Error).message;
+    // Don't leak raw error.message into the run's error column — it's
+    // returned to the workflow owner via the run summary. Log full
+    // details server-side and store a generic marker.
+    console.warn("[workflow-runner] executeBody failed:", (err as Error).message);
+    errorMessage = "workflow_failed";
   } finally {
     await finishRun(runId, ctx, status, errorMessage);
     await sql`
@@ -282,7 +286,11 @@ async function walk(nodeId: string, ctx: ExecutionContext): Promise<void> {
     ctx.outputs[node.id] = output;
   } catch (e) {
     status = "error";
-    err = (e as Error).message;
+    // Don't leak raw error.message into the per-node log — that log
+    // is returned to the workflow owner via the run summary. Log
+    // full details server-side and store a generic marker.
+    console.warn("[workflow-runner] node failed:", (e as Error).message);
+    err = "node_failed";
   }
   const finishedAt = new Date().toISOString();
   ctx.log.push({
@@ -465,7 +473,32 @@ async function httpPost(node: WorkflowNode, ctx: ExecutionContext): Promise<unkn
   // a hostname rebind. Better to fail loudly than exfiltrate.
   await assertSafeOutboundUrl(url, { allowLocal: false });
   const body = renderTemplate(JSON.stringify(cfg.body ?? {}), ctx);
-  const headers = isPlainObject(cfg.headers) ? cfg.headers as Record<string, string> : {};
+  // Strict header allowlist — `cfg.headers` is user-controlled, so we
+  // accept only a small fixed set (Content-Type, Authorization, Accept,
+  // User-Agent, X-Request-ID) and strip CRLF from every value to
+  // prevent HTTP response splitting / header smuggling into intermediate
+  // proxies. Anything else is dropped.
+  const ALLOWED_HEADERS = new Set([
+    "content-type",
+    "authorization",
+    "accept",
+    "user-agent",
+    "x-request-id",
+  ]);
+  const safeHeaders: Record<string, string> = {};
+  const rawHeaders = isPlainObject(cfg.headers) ? cfg.headers as Record<string, unknown> : {};
+  for (const [k, v] of Object.entries(rawHeaders)) {
+    if (typeof v !== "string") continue;
+    const lname = k.toLowerCase();
+    if (!ALLOWED_HEADERS.has(lname)) continue;
+    const cleaned = stripCrlf(v);
+    if (!cleaned) continue;
+    safeHeaders[lname] = cleaned.slice(0, 4000);
+  }
+  // Default to JSON Content-Type if the user didn't set anything else.
+  if (!safeHeaders["content-type"]) {
+    safeHeaders["content-type"] = "application/json";
+  }
   const timeoutMs = clampNumber(cfg.timeout_ms, 1000, 60_000, 15_000);
   // Use safeFetch with a 5 MB response cap so a malicious target can't
   // OOM the runner with a gigabyte response. safeFetch also disables
@@ -473,7 +506,7 @@ async function httpPost(node: WorkflowNode, ctx: ExecutionContext): Promise<unkn
   // assertSafeOutboundUrl).
   const res = await safeFetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...headers },
+    headers: safeHeaders,
     body,
     signal: AbortSignal.timeout(timeoutMs),
     maxBytes: 5 * 1024 * 1024,
@@ -918,4 +951,12 @@ function truncate(v: unknown, max: number): unknown {
   } catch {
     return String(v);
   }
+}
+
+// Strip CR/LF and any other control character from a header value.
+// Prevents HTTP response splitting / header smuggling when an attacker
+// can influence a header value.
+function stripCrlf(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/[\x00-\x1f\x7f]/g, "");
 }

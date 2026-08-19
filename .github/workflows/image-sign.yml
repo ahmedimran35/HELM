@@ -1,0 +1,109 @@
+# image-sign.yml — cosign sign + attach to GH release.
+#
+# Triggered when a release is published, OR manually via
+# workflow_dispatch. The manual path is the recommended one for now
+# because cosign KEYLESS mode requires OIDC token exchange with
+# Sigstore's Fulcio CA — GitHub-hosted runners support this, but the
+# workflow needs `permissions: id-token: write` AND the trust root
+# pinned to the production Sigstore (sigstore.tlog).
+
+name: image-sign
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to sign (defaults to current SHA)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write    # upload the signature back to the release
+  packages: write    # push the signed image to GHCR (optional)
+  id-token: write    # OIDC token for cosign KEYLESS signing
+
+jobs:
+  sign:
+    name: build + cosign sign + attach
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image tag
+        id: meta
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            TAG="${{ github.sha }}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${{ github.repository_owner }}/helm-api:${TAG}" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build + push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: backend/Dockerfile
+          tags: ${{ steps.meta.outputs.image }}
+          sbom: true
+          provenance: true
+          push: true
+          cache-from: type=gha,scope=helm-api-sign
+          cache-to: type=gha,mode=max,scope=helm-api-sign
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: "v2.4.1"
+
+      # Cosign keyless signing. Fulcio issues a short-lived cert
+      # bound to the runner's OIDC token; the transparency log entry
+      # is anchored in Sigstore's public log. No long-lived private
+      # key to leak.
+      #
+      # To switch to KEYFUL mode (long-lived keypair), replace
+      # `--yes` with `--key cosign.key` and add the matching
+      # `COSIGN_PASSWORD` + `COSIGN_KEY` secrets, then sign with
+      # `cosign sign --key env:COSIGN_KEY --yes $IMAGE`.
+      - name: cosign sign (keyless)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign sign --yes \
+            ${{ steps.meta.outputs.image }}
+
+      - name: cosign verify (self-check)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "https://github.com/${{ github.repository_owner }}/.*" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            ${{ steps.meta.outputs.image }}
+
+      - name: Attach signature to release (if release event)
+        if: github.event_name == 'release'
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          # gh release upload accepts any file path. cosign writes
+          # the signature side-by-side with the image when used
+          # inside the registry — for a downloadable artifact we
+          # download the signature bundle and upload it as `.sig`.
+          cosign download signature ${{ steps.meta.outputs.image }} > sig.json
+          gh release upload "${{ github.event.release.tag_name }}" \
+            --repo "${{ github.repository }}" \
+            sig.json

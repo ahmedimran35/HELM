@@ -40,6 +40,21 @@ interface AuthState {
 
 const Ctx = createContext<AuthState | null>(null);
 
+// All client-side state we own lives under the `helm.` prefix in
+// localStorage. On logout (or session-expiry) we wipe those keys so a
+// different account signing in on the same browser doesn't inherit the
+// previous user's theme, recents, draft inputs, etc.
+function clearHelmStorage() {
+  try {
+    const keys = Object.keys(window.localStorage).filter((k) =>
+      k.startsWith("helm."),
+    );
+    for (const k of keys) window.localStorage.removeItem(k);
+  } catch {
+    /* localStorage may be unavailable — best effort */
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [loading, setLoading] = useState(true);
@@ -80,9 +95,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // Listen for api-client 401 events and clear the user.
+  // Listen for api-client 401 events and clear the user + their local
+  // state. The RequireAuth route guard in App.tsx then bounces the user
+  // to /login once React re-renders.
   useEffect(() => {
-    const handler = () => setUser(null);
+    const handler = () => {
+      clearHelmStorage();
+      setUser(null);
+    };
     window.addEventListener("helm:unauthenticated", handler);
     return () => window.removeEventListener("helm:unauthenticated", handler);
   }, []);
@@ -102,6 +122,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await apiPost("/logout");
     } finally {
+      clearHelmStorage();
       setUser(null);
     }
   }, []);

@@ -31,6 +31,7 @@ import {
   GRID,
   MAX_SCALE,
   MIN_SCALE,
+  NODE_KIND_META,
 } from "./constants";
 import {
   edgePath,
@@ -369,14 +370,29 @@ export function Canvas(props: CanvasProps) {
   }
 
   function onDragOver(evt: React.DragEvent) {
-    if (Array.from(evt.dataTransfer.types).includes("text/x-node-kind")) {
+    // Only accept a single text/x-node-kind drop. A drag carrying any
+    // other type (Files, custom MIME from a hostile source) is rejected
+    // here so the browser stops routing the drop to onDrop.
+    const types = Array.from(evt.dataTransfer.types);
+    if (types.length === 1 && types[0] === "text/x-node-kind") {
       evt.preventDefault();
       evt.dataTransfer.dropEffect = "copy";
     }
   }
 
   function onDrop(evt: React.DragEvent) {
-    const kind = evt.dataTransfer.getData("text/x-node-kind") as NodeKind;
+    const types = Array.from(evt.dataTransfer.types);
+    if (types.length !== 1 || types[0] !== "text/x-node-kind") return;
+    const raw = evt.dataTransfer.getData("text/x-node-kind");
+    // Strict allowlist — only the six known kinds. A hostile page
+    // could craft a custom MIME with an arbitrary string and drop it
+    // on the canvas; hasOwnProperty rejects anything outside the
+    // canonical NODE_KIND_META map (including the empty string that
+    // getData() returns when no payload is set). Rejected drops are
+    // silently dropped — no node is added.
+    if (!raw) return;
+    if (!Object.prototype.hasOwnProperty.call(NODE_KIND_META, raw)) return;
+    const kind = raw as NodeKind;
     if (!kind) return;
     evt.preventDefault();
     const pt = svgPoint(evt.clientX, evt.clientY);

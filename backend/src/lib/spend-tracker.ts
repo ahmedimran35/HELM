@@ -139,31 +139,153 @@ export async function getCurrentSpend(
  *  allowed under the cap. Returns:
  *    - allowed: false  → caller must reject with `budget_exceeded`
  *    - over_warn: true → caller may want to show a soft warning
- *    - ratio: 0..N     → for UI progress bars */
+ *    - ratio: 0..N     → for UI progress bars
+ *
+ *  TOCTOU-safe: the check + reserve happens inside a single SQL
+ *  statement against the spend_caps row. Two concurrent chat turns
+ *  racing for the same panel+period must serialise on the row lock the
+ *  UPDATE takes; the second one sees the first one's increment and
+ *  fails its WHERE clause if it'd push the panel over the limit.
+ *  There's no separate SELECT → math → commit window in which another
+ *  reservation could land under us.
+ *
+ *  The `spent_cents` column on spend_caps is the row-local counter
+ *  we mutate; it's kept in sync with harness_runs by recomputing from
+ *  the source-of-truth at the start of each evaluation so a crashed /
+ *  failed reservation cannot leave the counter desynced. */
 export async function evaluateCap(
   panelId: string,
   period: SpendPeriod,
   additionalCostCents: number,
 ): Promise<{ allowed: boolean; snapshot: SpendSnapshot }> {
-  const snap = await getCurrentSpend(panelId, period);
-  const projected = snap.spent_cents + additionalCostCents;
-  const projectedRatio = snap.limit_cents > 0 ? projected / snap.limit_cents : 0;
-  if (snap.hard_cap && snap.limit_cents > 0 && projected > snap.limit_cents) {
+  if (!Number.isFinite(additionalCostCents) || additionalCostCents <= 0) {
+    // Non-positive reservations can't bust a cap; return a snapshot
+    // from the current spend without taking the lock.
+    const snap = await getCurrentSpend(panelId, period);
+    return { allowed: true, snapshot: snap };
+  }
+  const result = await sql.begin(async (tx) => {
+    // Step 1 — recompute spent_cents from harness_runs inside the same
+    // transaction so the counter reflects reality at the moment we
+    // take the row lock. Without this a previous failed reservation
+    // (e.g. process crash after a successful UPDATE but before the
+    // chat path committed) would leave spent_cents permanently high.
+    const recalc = await tx<SpendAggRow[]>`
+      SELECT COALESCE(SUM(
+        CASE
+          WHEN m.input_price_per_1k IS NULL OR m.output_price_per_1k IS NULL THEN
+            (hr.prompt_tokens + hr.completion_tokens) * 0.1 / 1000
+          ELSE
+            (hr.prompt_tokens  * m.input_price_per_1k +
+             hr.completion_tokens * m.output_price_per_1k)
+        END
+      ), 0)::numeric(12, 4) AS spent
+      FROM harness_runs hr
+      LEFT JOIN models m ON m.external_id = hr.model
+      WHERE hr.panel_id = ${panelId}::uuid
+        AND hr.status = 'ok'
+        AND hr.created_at >= ${sql.unsafe(periodStartSql(period))}
+    `;
+    const actualSpent = Number(recalc[0]?.spent ?? 0);
+
+    // Step 2 — locate the cap row. We use UPDATE ... WHERE in step 3
+    // so we don't need a row lock here; the UPDATE itself serialises.
+    const capRows = await tx<({ id: string } & SpendCapRow)[]>`
+      SELECT id, panel_id, period, limit_cents, warn_at_pct, hard_cap
+      FROM spend_caps
+      WHERE panel_id = ${panelId}::uuid AND period = ${period}
+      LIMIT 1
+    `;
+    const cap = capRows[0] ?? null;
+    if (!cap) {
+      // No cap configured — every spend is allowed; return without
+      // touching any row.
+      return {
+        allowed: true,
+        snap: {
+          panel_id: panelId,
+          period,
+          spent_cents: actualSpent,
+          limit_cents: 0,
+          warn_at_pct: 80,
+          hard_cap: false,
+          ratio: 0,
+          over_warn: false,
+          over_limit: false,
+        },
+      };
+    }
+
+    // Step 3 — single statement: increment the counter only if the
+    // projected total still fits under the cap. The row lock taken by
+    // UPDATE serialises concurrent reservations for the same panel /
+    // period so two chats can't both observe spent=10 and both succeed
+    // against a cap of 15.
+    const updated = await tx<{
+      id: string;
+      spent_cents: string;
+      limit_cents: number;
+      warn_at_pct: number;
+      hard_cap: boolean;
+    }[]>`
+      UPDATE spend_caps
+      SET spent_cents = ${actualSpent} + ${additionalCostCents},
+          updated_at = now()
+      WHERE id = ${cap.id}::uuid
+        AND (hard_cap = false OR ${actualSpent} + ${additionalCostCents} <= limit_cents)
+      RETURNING id, spent_cents::text AS spent_cents, limit_cents,
+                warn_at_pct, hard_cap
+    `;
+    if (updated[0]) {
+      const newSpent = Number(updated[0].spent_cents);
+      const limit = updated[0].limit_cents;
+      const projectedRatio = limit > 0 ? newSpent / limit : 0;
+      return {
+        allowed: true,
+        snap: {
+          panel_id: panelId,
+          period,
+          spent_cents: newSpent,
+          limit_cents: limit,
+          warn_at_pct: updated[0].warn_at_pct,
+          hard_cap: updated[0].hard_cap,
+          ratio: projectedRatio,
+          over_warn: limit > 0 && projectedRatio * 100 >= updated[0].warn_at_pct,
+          over_limit: limit > 0 && newSpent >= limit,
+        },
+      };
+    }
+    // No rows updated — the cap would be busted. Build a snapshot
+    // from the *pre-reservation* totals so the caller knows how close
+    // they were.
+    const projected = actualSpent + additionalCostCents;
+    const projectedRatio = cap.limit_cents > 0 ? projected / cap.limit_cents : 0;
     return {
       allowed: false,
-      snapshot: { ...snap, ratio: projectedRatio, over_limit: true },
+      snap: {
+        panel_id: panelId,
+        period,
+        spent_cents: actualSpent,
+        limit_cents: cap.limit_cents,
+        warn_at_pct: cap.warn_at_pct,
+        hard_cap: cap.hard_cap,
+        ratio: projectedRatio,
+        over_warn: cap.limit_cents > 0 && projectedRatio * 100 >= cap.warn_at_pct,
+        over_limit: cap.limit_cents > 0 && projected >= cap.limit_cents,
+      },
     };
-  }
-  return {
-    allowed: true,
-    snapshot: { ...snap, ratio: projectedRatio },
-  };
+  });
+  return { allowed: result.allowed, snapshot: result.snap };
 }
 
 /** Record a spend event. Bumps the cache immediately so the next
  *  call sees the new total without re-querying. Fires a warn
  *  notification if crossing the warn threshold (deduped per period
- *  so a chat storm doesn't spam). */
+ *  so a chat storm doesn't spam). Also re-syncs `spend_caps.spent_cents`
+ *  from harness_runs so the counter evaluateCap() reserved earlier
+ *  (an estimate) is corrected to reality; otherwise a long chat whose
+ *  actual cost came in below the reservation would leave the cap
+ *  artificially locked. */
 export async function recordSpend(
   panelId: string,
   userId: string,
@@ -182,6 +304,35 @@ export async function recordSpend(
       spent_cents: cached.spent_cents + costCents,
       fetched_at: cached.fetched_at,
     });
+  }
+
+  // Re-sync spend_caps.spent_cents from the source of truth. The
+  // reservation from evaluateCap() was an estimate; harness_runs
+  // holds the actual cost the LLM produced.
+  try {
+    await sql`
+      UPDATE spend_caps
+      SET spent_cents = COALESCE((
+            SELECT SUM(
+              CASE
+                WHEN m.input_price_per_1k IS NULL OR m.output_price_per_1k IS NULL THEN
+                  (hr.prompt_tokens + hr.completion_tokens) * 0.1 / 1000
+                ELSE
+                  (hr.prompt_tokens  * m.input_price_per_1k +
+                   hr.completion_tokens * m.output_price_per_1k)
+              END
+            )
+            FROM harness_runs hr
+            LEFT JOIN models m ON m.external_id = hr.model
+            WHERE hr.panel_id = ${panelId}::uuid
+              AND hr.status = 'ok'
+              AND hr.created_at >= ${sql.unsafe(periodStartSql(period))}
+          ), 0)
+      WHERE spend_caps.panel_id = ${panelId}::uuid AND spend_caps.period = ${period}
+    `;
+  } catch (err) {
+    // Non-fatal — the next evaluateCap() will recompute anyway.
+    console.warn("[spend-tracker] spent_cents re-sync failed:", (err as Error).message);
   }
 
   // Check the cap and possibly fire a warn notification.

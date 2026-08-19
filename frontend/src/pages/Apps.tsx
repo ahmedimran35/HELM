@@ -114,6 +114,7 @@ interface UserSummary {
 export function AppsPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
+  const { addToast } = useToast();
 
   const [apps, setApps] = useState<AppRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -123,7 +124,16 @@ export function AppsPage() {
     setApps(null);
     apiGet<AppRow[]>("/apps")
       .then(setApps)
-      .catch((err) => setError((err as Error).message));
+      .catch((err) => {
+        const msg = (err as Error).message;
+        setError(msg);
+        addToast({
+          id: `apps-load-err-${Date.now()}`,
+          title: "Failed to load apps",
+          description: msg,
+          tone: "warning",
+        });
+      });
   };
 
   useEffect(() => {
@@ -160,12 +170,12 @@ export function AppsPage() {
           <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-textFaint pointer-events-none">
             <SearchIcon size={14} />
           </span>
-          <input
+          <Input
             name="apps-search"
             placeholder="Search apps by name, slug, or description…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="w-full h-9 bg-panelAlt border border-border text-text pl-8 pr-3 rounded-none font-mono text-[13px] placeholder:text-textFaint focus:border-brass"
+            className="w-full pl-8"
           />
         </div>
         {apps && (

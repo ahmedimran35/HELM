@@ -3,6 +3,33 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  // Vendor chunk splitting — keep React + React Router in their own
+  // shared chunks so the browser caches them once across all route
+  // bundles. The app code per-route is already split via React.lazy
+  // + dynamic imports (see frontend/src/App.tsx). Rollup's manualChunks
+  // splits node_modules into long-lived chunks that are content-hashed
+  // independently of the app code.
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id: string) {
+          if (id.includes("node_modules")) {
+            // React core + DOM — used by every page.
+            if (id.match(/[\\/]react|react-dom|scheduler[\\/]/)) {
+              return "vendor-react";
+            }
+            // React Router — needed by the SPA shell + every page.
+            if (id.includes("react-router")) {
+              return "vendor-router";
+            }
+            // Anything else from node_modules — common chunk.
+            return "vendor";
+          }
+          return undefined;
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     proxy: {

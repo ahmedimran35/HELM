@@ -128,12 +128,17 @@ async function ping(kind: HarnessKind): Promise<HarnessHealth> {
     health.set(kind, entry);
     return entry;
   } catch (err) {
+    // Don't leak raw error.message into the harness entry — that
+    // field is surfaced back to admins via /api/health/harnesses and
+    // could expose internal provider hostnames or API key fragments.
+    // Log full details server-side and store a generic marker.
+    console.warn("[health-check] ping failed:", (err as Error).message);
     const entry: HarnessHealth = {
       kind,
       status: "down",
       latency_ms: Date.now() - started,
       last_checked_at: Date.now(),
-      reason: (err as Error).message ?? "ping_failed",
+      reason: "ping_failed",
     };
     health.set(kind, entry);
     return entry;

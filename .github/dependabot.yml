@@ -1,0 +1,43 @@
+# Dependabot — weekly updates for the ecosystems this repo touches.
+# Bumps land as PRs; CI runs typecheck + migration smoke on each PR.
+# Schedule is Monday-morning UTC so PRs surface early in the work week.
+
+version: 2
+updates:
+  # bun / npm ecosystem — backend deps + frontend deps.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    # Group patch + minor bumps so we don't drown in PRs.
+    groups:
+      patch-and-minor:
+        update-types: ["minor", "patch"]
+
+  # GitHub Actions ecosystem — keep workflow deps fresh.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "ci"
+
+  # Docker base images — oven/bun, postgres, redis, lightpanda.
+  # Watches the FROM lines in backend/Dockerfile and the `image:` keys
+  # in docker-compose.yml + docker-compose.prod.yml.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "docker"

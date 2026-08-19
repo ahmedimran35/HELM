@@ -4,33 +4,20 @@
 //   playground — side-by-side comparison of two models
 
 import { useEffect, useState } from "react";
-import { apiGet, apiPost, apiDelete } from "../api/client";
+// `apiPost` is no longer used in this file (providers CRUD goes via
+// the OpenAPI typed client). The playground endpoint lives in
+// models.ts and is reached via `fetch`+`apiPost<...>` there.
+import { openapi, type Provider, type Model as OpenApiModel, type ProviderHealth } from "../api/openapi";
 import { useAuth } from "../auth/AuthContext";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { CallSign } from "../components/ui/CallSign";
 import { NoAccess } from "../components/ui/NoAccess";
+import { Skeleton } from "../components/ui/feedback/Skeleton";
+import { useToast } from "../components/ui/feedback/Toast";
 
-interface Provider {
-  id: string;
-  type: string;
-  base_url: string;
-  display_name: string | null;
-  api_key_masked: string;
-  added_at: string;
-  model_count: number;
-}
-
-interface ModelRow {
-  id: string;
-  provider_id: string;
-  provider_type: string;
-  external_id: string;
-  display_name: string;
-  assigned: boolean;
-  pending_request: boolean;
-}
+interface ModelRow extends OpenApiModel {}
 
 type Tab = "providers" | "models" | "playground";
 
@@ -69,8 +56,9 @@ export function ProvidersPage() {
 }
 
 function ProvidersTab() {
-  const [list, setList] = useState<Provider[]>([]);
-  const reload = () => apiGet<Provider[]>("/providers").then(setList);
+  const { addToast } = useToast();
+  const [list, setList] = useState<Provider[] | null>(null);
+  const reload = () => openapi.listProviders().then(setList);
   useEffect(() => {
     reload();
   }, []);
@@ -86,18 +74,25 @@ function ProvidersTab() {
     setError(null);
     try {
       // allow_local so the bundled fake provider works in dev.
-      await apiPost("/providers?allow_local=1", {
+      await openapi.addProvider({
         type,
         base_url: baseUrl,
         api_key: apiKey,
         display_name: name || null,
-      });
+      }, { allowLocal: true });
       setBaseUrl("");
       setApiKey("");
       setName("");
       reload();
     } catch (err) {
-      setError((err as Error).message);
+      const msg = (err as Error).message;
+      setError(msg);
+      addToast({
+        id: `prov-add-err-${Date.now()}`,
+        title: "Add provider failed",
+        description: msg,
+        tone: "warning",
+      });
     }
   }
 
@@ -105,20 +100,93 @@ function ProvidersTab() {
     setError(null);
     setLastFetched(null);
     try {
-      const res = await apiPost<{ ok: boolean; added: number; updated: number; total: number }>(
-        `/providers/${p.id}/fetch?allow_local=1`,
-      );
+      const res = await openapi.fetchProviderModels(p.id, { allowLocal: true });
       setLastFetched(`Fetched ${res.total} models (${res.added} new, ${res.updated} refreshed)`);
       reload();
     } catch (err) {
-      setError((err as Error).message);
+      const msg = (err as Error).message;
+      setError(msg);
+      addToast({
+        id: `prov-fetch-err-${p.id}`,
+        title: "Fetch failed",
+        description: msg,
+        tone: "warning",
+      });
+    }
+  }
+
+  async function test(p: Provider) {
+    setError(null);
+    setLastFetched(null);
+    try {
+      const res = await openapi.testProvider(p.id, { allowLocal: true });
+      if (res.ok) {
+        const sample = res.sample?.length
+          ? ` · sample: ${res.sample.join(", ")}`
+          : "";
+        setLastFetched(
+          `Test OK · ${res.latency_ms}ms · ${res.upstream_status} · ${res.models_seen ?? 0} models upstream${sample}`,
+        );
+      } else {
+        const msg = `Test failed after ${res.latency_ms}ms: ${res.error ?? res.upstream_status}`;
+        setError(msg);
+        addToast({
+          id: `prov-test-fail-${p.id}`,
+          title: "Test failed",
+          description: msg,
+          tone: "warning",
+        });
+      }
+      reload();
+    } catch (err) {
+      const msg = (err as Error).message;
+      setError(msg);
+      addToast({
+        id: `prov-test-err-${p.id}`,
+        title: "Test failed",
+        description: msg,
+        tone: "warning",
+      });
     }
   }
 
   async function remove(p: Provider) {
-    if (!confirm(`Remove provider "${p.display_name ?? p.base_url}"?`)) return;
-    await apiDelete(`/providers/${p.id}`);
+    const label = p.display_name ?? p.base_url;
+    // Cascade is explicit so the admin knows they're about to delete
+    // the provider AND its models (and any model_access grants for
+    // those models).
+    const msg =
+      `Remove provider "${label}"?\n\n` +
+      `This will also delete ${p.model_count} model(s) returned by this provider, ` +
+      `plus any model_access grants for those models. This cannot be undone.`;
+    if (!confirm(msg)) return;
+    const res = await openapi.deleteProvider(p.id);
+    setLastFetched(
+      res.models_removed
+        ? `Removed ${label} and ${res.models_removed} model(s)`
+        : `Removed ${label}`,
+    );
     reload();
+  }
+
+  /** Re-enter the API key for a provider whose stored key can't be
+   *  decrypted (typically because SESSION_SECRET was rotated). The
+   *  new key is re-encrypted under the current crypto parameters. */
+  async function reenterKey(p: Provider) {
+    const label = p.display_name ?? p.base_url;
+    const newKey = window.prompt(
+      `Re-enter the API key for "${label}".\n\n` +
+      `The stored key can't be decrypted (likely because SESSION_SECRET has rotated). ` +
+      `The new key will be encrypted with the current SESSION_SECRET.`,
+    );
+    if (!newKey) return;
+    try {
+      await openapi.rotateProviderKey(p.id, { api_key: newKey });
+      setLastFetched(`Re-encrypted key for ${label}`);
+      reload();
+    } catch (err) {
+      setError(`re-encrypt failed: ${(err as Error).message}`);
+    }
   }
 
   return (
@@ -180,9 +248,15 @@ function ProvidersTab() {
 
       <div className="border border-border bg-panel">
         <div className="px-4 py-2 border-b border-borderSoft mono-caps text-[11px] text-textMuted">
-          Configured ({list.length})
+          Configured ({list?.length ?? 0})
         </div>
-        {list.length === 0 ? (
+        {list === null ? (
+          <div className="p-4 space-y-3" aria-busy="true">
+            <Skeleton variant="row" />
+            <Skeleton variant="row" />
+            <Skeleton variant="row" />
+          </div>
+        ) : list.length === 0 ? (
           <div className="p-6 text-center mono-caps text-[11px] text-textFaint">
             no providers
           </div>
@@ -193,15 +267,29 @@ function ProvidersTab() {
               className="px-4 py-3 border-b border-borderSoft last:border-b-0 flex items-center gap-3"
             >
               <CallSign id={`PRV-${p.id.slice(0, 4).toUpperCase()}`} />
+              <HealthDot health={p.health} />
               <div className="flex-1">
                 <div className="font-mono text-[13px] text-text">
                   {p.display_name || p.type || p.base_url}
                 </div>
                 <div className="mono-caps text-[10px] text-textMuted">
                   {p.type} · {p.base_url} · {p.model_count} models · key {p.api_key_masked}
+                  {p.key_unreadable && (
+                    <> · <span className="text-rust">re-enter key to use</span></>
+                  )}
+                  {p.health?.latency_ms != null && (
+                    <> · {p.health.latency_ms}ms</>
+                  )}
+                  {p.health?.reason && (
+                    <> · <span className="text-rust">{p.health.reason}</span></>
+                  )}
                 </div>
               </div>
+              <Button size="sm" onClick={() => test(p)}>Test</Button>
               <Button size="sm" onClick={() => fetch(p)}>Fetch</Button>
+              {p.key_unreadable && (
+                <Button size="sm" onClick={() => reenterKey(p)}>Re-enter key</Button>
+              )}
               <Button variant="danger" size="sm" onClick={() => remove(p)}>Remove</Button>
             </div>
           ))
@@ -212,16 +300,23 @@ function ProvidersTab() {
 }
 
 function ModelsTab() {
-  const [models, setModels] = useState<ModelRow[]>([]);
+  const [models, setModels] = useState<ModelRow[] | null>(null);
   useEffect(() => {
-    apiGet<ModelRow[]>("/models").then(setModels);
+    openapi.listModels().then((rows) => setModels(rows as ModelRow[]));
   }, []);
   return (
     <div className="border border-border bg-panel">
       <div className="px-4 py-2 border-b border-borderSoft mono-caps text-[11px] text-textMuted">
-        Model registry ({models.length})
+        Model registry ({models?.length ?? 0})
       </div>
-      {models.length === 0 ? (
+      {models === null ? (
+        <div className="p-4 space-y-3" aria-busy="true">
+          <Skeleton variant="row" />
+          <Skeleton variant="row" />
+          <Skeleton variant="row" />
+          <Skeleton variant="row" />
+        </div>
+      ) : models.length === 0 ? (
         <div className="p-6 text-center mono-caps text-[11px] text-textFaint">
           no models — add a provider and click Fetch
         </div>
@@ -253,7 +348,7 @@ function ModelsTab() {
 }
 
 function PlaygroundTab() {
-  const [models, setModels] = useState<ModelRow[]>([]);
+  const [models, setModels] = useState<ModelRow[] | null>(null);
   const [a, setA] = useState<string>("");
   const [b, setB] = useState<string>("");
   const [prompt, setPrompt] = useState("Explain what a vector database is in two sentences.");
@@ -263,7 +358,7 @@ function PlaygroundTab() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    apiGet<ModelRow[]>("/models").then((m) => {
+    openapi.listModels().then((m) => {
       setModels(m);
       if (m[0]) setA(m[0].id);
       if (m[1]) setB(m[1].id);
@@ -320,13 +415,21 @@ function PlaygroundTab() {
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-3 gap-2">
-        <ModelSelect label="Model A" models={models} value={a} onChange={setA} />
-        <ModelSelect label="Model B" models={models} value={b} onChange={setB} />
-        <Button variant="primary" onClick={run} disabled={streaming || !a || !b}>
-          {streaming ? "Streaming…" : "Compare"}
-        </Button>
-      </div>
+      {models === null ? (
+        <div className="grid grid-cols-3 gap-2" aria-busy="true">
+          <Skeleton variant="block" height={66} />
+          <Skeleton variant="block" height={66} />
+          <Skeleton variant="block" height={66} />
+        </div>
+      ) : (
+        <div className="grid grid-cols-3 gap-2">
+          <ModelSelect label="Model A" models={models} value={a} onChange={setA} />
+          <ModelSelect label="Model B" models={models} value={b} onChange={setB} />
+          <Button variant="primary" onClick={run} disabled={streaming || !a || !b}>
+            {streaming ? "Streaming…" : "Compare"}
+          </Button>
+        </div>
+      )}
       <textarea
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
@@ -387,5 +490,22 @@ function ReplyPanel({ label, content }: { label: string; content: string }) {
         {content || <span className="mono-caps text-textFaint text-[10px]">—</span>}
       </div>
     </div>
+  );
+}
+
+const HEALTH_DOT: Record<ProviderHealth["status"], { bg: string; label: string }> = {
+  healthy: { bg: "bg-teal", label: "healthy" },
+  degraded: { bg: "bg-brass", label: "degraded" },
+  down: { bg: "bg-rust", label: "down" },
+  unknown: { bg: "bg-textFaint", label: "unknown" },
+};
+
+function HealthDot({ health }: { health: ProviderHealth | null }) {
+  const cfg = health ? HEALTH_DOT[health.status] : HEALTH_DOT.unknown;
+  return (
+    <span
+      title={health ? `${cfg.label} · ${health.latency_ms}ms${health.reason ? " · " + health.reason : ""}` : "no health data"}
+      className={`inline-block w-2.5 h-2.5 rounded-full ${cfg.bg} shrink-0`}
+    />
   );
 }

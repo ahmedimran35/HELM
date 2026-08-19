@@ -22,6 +22,7 @@
 
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { logSecurityEvent } from "./security-events.ts";
 
 const ALLOWED_PORTS = new Set([80, 443]);
 
@@ -120,6 +121,7 @@ export async function assertSafeOutboundUrl(
   }
   // Reject control characters and whitespace early.
   if (/[\x00-\x1f\x7f\s]/.test(rawUrl)) {
+    emitSsrfBlock("control_or_whitespace", "");
     throw new SafeFetchError("URL contains control or whitespace characters");
   }
   let url: URL;
@@ -129,25 +131,33 @@ export async function assertSafeOutboundUrl(
     throw new SafeFetchError("invalid URL");
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
+    emitSsrfBlock("bad_scheme", "");
     throw new SafeFetchError(`scheme ${url.protocol} is not allowed`);
   }
   // Strip userinfo — `https://user:pass@host/` leaks creds via proxy logs.
   if (url.username || url.password) {
+    emitSsrfBlock("userinfo", url.hostname);
     throw new SafeFetchError("URL with embedded credentials is not allowed");
   }
   const host = url.hostname;
-  if (!host) throw new SafeFetchError("URL is missing hostname");
+  if (!host) {
+    emitSsrfBlock("missing_host", "");
+    throw new SafeFetchError("URL is missing hostname");
+  }
   if (hasSuspiciousEncoding(host)) {
+    emitSsrfBlock("numeric_ip_encoding", host);
     throw new SafeFetchError("URL uses a numeric IP encoding");
   }
   if (!opts.allowLocal) {
     if (BLOCKED_HOSTS.has(host.toLowerCase())) {
+      emitSsrfBlock("metadata_host", host);
       throw new SafeFetchError(`host ${host} is a metadata service`);
     }
   }
 
   // Port check — for user-driven URLs only allow 80/443.
   if (!opts.allowLocal && url.port && !ALLOWED_PORTS.has(Number(url.port))) {
+    emitSsrfBlock("bad_port", host);
     throw new SafeFetchError(`port ${url.port} is not allowed for user-driven URLs`);
   }
 
@@ -156,9 +166,11 @@ export async function assertSafeOutboundUrl(
   try {
     resolved = await lookup(host, { all: true });
   } catch (err) {
+    emitSsrfBlock("dns_failure", host);
     throw new SafeFetchError(`DNS resolution failed for ${host}: ${(err as Error).message}`);
   }
   if (resolved.length === 0) {
+    emitSsrfBlock("no_dns", host);
     throw new SafeFetchError(`no DNS records for ${host}`);
   }
   for (const r of resolved) {
@@ -170,13 +182,16 @@ export async function assertSafeOutboundUrl(
     const family = isIP(ip);
     if (family === 4) {
       if (!opts.allowLocal && isPrivateIPv4(ip)) {
+        emitSsrfBlock("private_ipv4", host);
         throw new SafeFetchError(`host ${host} resolves to private IPv4 ${ip}`);
       }
     } else if (family === 6) {
       if (!opts.allowLocal && isPrivateIPv6(ip)) {
+        emitSsrfBlock("private_ipv6", host);
         throw new SafeFetchError(`host ${host} resolves to private IPv6 ${ip}`);
       }
     } else {
+      emitSsrfBlock("invalid_ip", host);
       throw new SafeFetchError(`host ${host} resolved to invalid IP ${ip}`);
     }
   }
@@ -187,6 +202,26 @@ export async function assertSafeOutboundUrl(
 
 export class SafeFetchError extends Error {
   readonly code = "safe_fetch_error";
+}
+
+/**
+ * Emit a structured `ssrf_block` security event. Called from every
+ * throw site in this module so the log aggregator sees a single
+ * signal type for "the SSRF guard stopped something". We do NOT throw
+ * here — the caller has already decided to abort the request.
+ */
+function emitSsrfBlock(reason: string, host: string): void {
+  try {
+    logSecurityEvent({
+      type: "ssrf_block",
+      severity: "warn",
+      route: "safe_fetch",
+      details: { reason, host },
+      ts: Date.now(),
+    });
+  } catch {
+    /* never let the logger break the request path */
+  }
 }
 
 const MAX_BYTES_DEFAULT = 5 * 1024 * 1024; // 5 MB
@@ -209,7 +244,7 @@ const MAX_BYTES_DEFAULT = 5 * 1024 * 1024; // 5 MB
  */
 export async function safeFetch(
   rawUrl: string,
-  init: RequestInit & { maxBytes?: number } = {},
+  init: RequestInit & { maxBytes?: number; allowLocal?: boolean } = {},
 ): Promise<Response> {
   // Validate URL + classify IP-range (also captures initial DNS into
   // `url`).
@@ -223,11 +258,13 @@ export async function safeFetch(
     const fresh = await lookup(host, { all: true });
     for (const r of fresh) {
       if (r.family === 4 && isPrivateIPv4(r.address)) {
+        emitSsrfBlock("dns_rebind_ipv4", host);
         throw new SafeFetchError(
           `host ${host} re-resolved to private IPv4 ${r.address} (DNS rebind blocked)`,
         );
       }
       if (r.family === 6 && isPrivateIPv6(r.address)) {
+        emitSsrfBlock("dns_rebind_ipv6", host);
         throw new SafeFetchError(
           `host ${host} re-resolved to private IPv6 ${r.address} (DNS rebind blocked)`,
         );
@@ -252,6 +289,7 @@ export async function safeFetch(
       total += value.byteLength;
       if (total > cap) {
         await reader.cancel();
+        emitSsrfBlock("response_too_large", host);
         throw new SafeFetchError(`response exceeded ${cap} bytes`);
       }
       chunks.push(value);

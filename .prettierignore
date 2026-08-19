@@ -1,0 +1,12 @@
+node_modules
+dist
+build
+.artifacts
+coverage
+bun.lock
+bun.lockb
+*.tsbuildinfo
+tmp
+.DS_Store
+apps-bundles
+gui-test-screenshots

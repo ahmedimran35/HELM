@@ -9,7 +9,12 @@ import { Hono } from "hono";
 import { sql } from "../db/client.ts";
 import { requireAuth } from "../middleware/auth.ts";
 import { logAudit } from "../lib/audit.ts";
+import { sanitizeContentDispositionFilename, UnsafeFilenameError } from "../lib/safe-filename.ts";
 import { validate, validationErrorResponse } from "../lib/validate.ts";
+import { logSecurityEvent } from "../lib/security-events.ts";
+import { parsePagination, paginatedResponse } from "../lib/pagination.ts";
+
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 MB
 import { computeNextRun } from "../lib/cron.ts";
 import { recall, ingest } from "../lib/memory-strategies/index.ts";
 import type { MemoryEntry, MemoryScope } from "../lib/memory-strategies/types.ts";
@@ -32,16 +37,22 @@ router.use("*", requireAuth);
 // ----- list -----
 router.get("/memory", async (c) => {
   const user = c.get("user");
+  const page = parsePagination(c, { defaultLimit: 50, maxLimit: 200 });
   const scopes: Array<[MemoryScope, string | null]> = [["personal", user.id], ["team", null]];
   if (user.role === "admin") scopes.push(["admin", null]);
-  const batches = await Promise.all(scopes.map(([scope, scopeId]) => recall("", scope, scopeId, 200)));
+  const perScopeLimit = page.limit + 50;
+  const batches = await Promise.all(
+    scopes.map(([scope, scopeId]) => recall("", scope, scopeId, perScopeLimit)),
+  );
   const seen = new Set<string>();
-  const rows = batches.flat().filter((entry) => {
+  const all = batches.flat().filter((entry) => {
     if (seen.has(entry.id)) return false;
     seen.add(entry.id);
     return true;
-  }).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).slice(0, 200);
-  return c.json(rows);
+  }).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  const total = all.length;
+  const rows = all.slice(page.offset, page.offset + page.limit);
+  return c.json(paginatedResponse(rows, total, page));
 });
 
 // ----- create -----
@@ -142,11 +153,29 @@ router.post("/files", async (c) => {
   if (!name || name.length > 255) {
     return c.json({ error: "name required (≤255 chars)" }, 400);
   }
+  // Size cap — mirrors the cap on /api/files (25 MB). Without this
+  // an authenticated user can OOM the backend by streaming a multi-GB
+  // upload that the server buffers in memory.
+  if (file.size > MAX_UPLOAD_BYTES) {
+    logSecurityEvent({
+      type: "large_upload",
+      severity: "warn",
+      userId: user.id,
+      route: "/api/workspace/files",
+      details: { byte_size: file.size, cap: MAX_UPLOAD_BYTES },
+      ts: Date.now(),
+    });
+    return c.json(
+      { error: `file too large (max ${MAX_UPLOAD_BYTES} bytes)` },
+      413,
+    );
+  }
   const buf = new Uint8Array(await file.arrayBuffer());
   const sha = await sha256Hex(buf);
   const blobRows = await sql<{ id: string }[]>`
     INSERT INTO file_blobs (mime_type, bytes, sha256, byte_size)
-    VALUES (${file.type || "application/octet-stream"}, ${buf}::bytea, ${sha}, ${buf.length}::bigint)
+    VALUES (${file.type || "application/octet-stream"}, ${buf}::bytea,
+            ${sha}, ${buf.length}::bigint)
     RETURNING id
   `;
   const blobId = blobRows[0]!.id;
@@ -183,10 +212,28 @@ router.get("/files/:id/download", async (c) => {
   `;
   const r = rows[0];
   if (!r) return c.json({ error: "not_found" }, 404);
+  // Sanitize the filename used in Content-Disposition. The previous
+  // `encodeURIComponent(r.name)` leaked `"`, `\r`, `\n`, `;` — enough
+  // to inject a second filename header. Now we emit a safe ASCII
+  // fallback + RFC 5987 `filename*=UTF-8''…` for Unicode support.
+  let cdHeader: string;
+  try {
+    cdHeader = sanitizeContentDispositionFilename(r.name).header;
+  } catch (err) {
+    logSecurityEvent({
+      type: "suspicious_payload",
+      severity: "warn",
+      userId: user.id,
+      route: "/api/workspace/files/:id/download",
+      details: { reason: (err as Error).message, file_id: id },
+      ts: Date.now(),
+    });
+    cdHeader = `attachment; filename="download.bin"`;
+  }
   return new Response(new Uint8Array(r.bytes), {
     headers: {
       "Content-Type": r.mime_type || "application/octet-stream",
-      "Content-Disposition": `attachment; filename="${encodeURIComponent(r.name)}"`,
+      "Content-Disposition": cdHeader,
     },
   });
 });

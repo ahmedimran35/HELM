@@ -326,9 +326,7 @@ export function WorkflowsPage() {
         <div className="flex items-start justify-between gap-4 mb-6">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <span className="mono-caps text-[10px] text-brass tracking-wider">
-                workflows
-              </span>
+              <Badge tone="brass">workflows</Badge>
               <span className="text-textFaint mono-caps text-[10px]">
                 / visual builder
               </span>
@@ -381,11 +379,11 @@ export function WorkflowsPage() {
             <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-textFaint pointer-events-none">
               <SearchIcon size={14} />
             </span>
-            <input
+            <Input
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search workflows…"
-              className="w-full h-9 bg-panelAlt border border-border text-text pl-8 pr-3 font-mono text-[13px] placeholder:text-textFaint focus:border-brass"
+              className="w-full pl-8"
             />
           </div>
           {q && (
@@ -929,6 +927,7 @@ function NewWorkflowForm({
   onCancel: () => void;
   onCreated: (w: { id: string; slug: string }) => void;
 }) {
+  const { addToast } = useToast();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [busy, setBusy] = useState(false);
@@ -951,7 +950,14 @@ function NewWorkflowForm({
       });
       onCreated(r);
     } catch (e) {
-      setErr((e as Error).message);
+      const msg = (e as Error).message;
+      setErr(msg);
+      addToast({
+        id: `wf-new-err-${Date.now()}`,
+        title: "Create workflow failed",
+        description: msg,
+        tone: "warning",
+      });
     } finally {
       setBusy(false);
     }

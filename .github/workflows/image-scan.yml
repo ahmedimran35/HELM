@@ -1,0 +1,110 @@
+# image-scan.yml — Trivy container vulnerability scan.
+#
+# Runs on every push to main, every PR, and weekly as a cron. The
+# weekly sweep catches newly-disclosed CVEs in base images and
+# transitive dependencies that slip past the per-PR check.
+#
+# Outputs:
+#   - SARIF report → GitHub Code Scanning (Security tab)
+#   - Raw scan log → workflow artifact (for audit)
+#   - exit-code 1   → block the PR on CRITICAL/HIGH findings
+#
+# Failure policy: severity: CRITICAL,HIGH. MEDIUM and LOW are
+# reported but don't break the build. Bump / filter the severity
+# list in the `with:` block of aquasecurity/trivy-action if your
+# risk model changes.
+
+name: image-scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Mondays at 06:00 UTC — the new GHSA / NVD dumps have settled
+    # by then and developers are at their desks.
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+  # Required for `upload-sarif` to land the report in Code Scanning.
+  security-events: write
+
+jobs:
+  trivy:
+    name: trivy (helm-api)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build the image so we scan EXACTLY what would ship.
+      - name: Build image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: backend/Dockerfile
+          tags: helm-api:scan
+          push: false
+          sbom: true
+          provenance: true
+          cache-from: type=gha,scope=helm-api-scan
+          cache-to: type=gha,mode=max,scope=helm-api-scan
+
+      # Filesystem-scan fallback: also catches vulnerabilities in the
+      # Dockerfile / source tree so we don't miss source-level issues
+      # that wouldn't appear in the image layer scan.
+      - name: Trivy filesystem scan (source)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-fs.sarif
+          severity: CRITICAL,HIGH
+          # Don't fail the build on the fs scan — only the image
+          # scan is gating. We use the fs scan as a "good signal"
+          # to surface in the Code Scanning tab.
+          exit-code: "0"
+          ignore-unfixed: true
+
+      - name: Trivy image scan (gating)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: image
+          scan-ref: helm-api:scan
+          format: sarif
+          output: trivy-image.sarif
+          severity: CRITICAL,HIGH
+          # Fail the build on any CRITICAL/HIGH finding.
+          exit-code: "1"
+          ignore-unfixed: true
+          # Skip-trivy-db-update is fine in CI; the action updates
+          # by default and we want fresh CVEs.
+
+      - name: Upload SARIF (image) → Code Scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+      - name: Upload SARIF (filesystem) → Code Scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-filesystem
+
+      - name: Upload raw scan logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-reports
+          path: |
+            trivy-image.sarif
+            trivy-fs.sarif
+          retention-days: 30

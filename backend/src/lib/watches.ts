@@ -205,7 +205,12 @@ async function executeAction(
     message = result;
   } catch (err) {
     status = "error";
-    message = (err as Error).message;
+    // Don't leak the raw error into watch_runs.message — that field
+    // is exposed back to the watch owner via the /api/watches/:id/runs
+    // endpoint. Log the full details server-side and store a generic
+    // marker instead.
+    console.warn("[watches] executeAction failed:", (err as Error).message);
+    message = "watch_action_failed";
   }
   await sql`
     UPDATE watch_runs
@@ -246,27 +251,33 @@ async function dispatchAction(
     const panelId = String(cfg.panel_id ?? "").trim();
     const contentTemplate = String(cfg.content ?? "");
     if (!panelId) throw new Error("panel_message requires action_config.panel_id");
-    // Membership check — without this, any user with a `panel_message`
-    // watch could post attacker-controlled text into any other user's
-    // panel by guessing the UUID.
-    const isAdmin = (ctx as { isAdmin?: boolean }).isAdmin === true;
-    if (!isAdmin) {
-      const member = await sql<{ exists: number }[]>`
-        SELECT EXISTS (
-          SELECT 1 FROM panel_members
-          WHERE panel_id = ${panelId}::uuid AND user_id = ${userId}::uuid
-        )::int AS exists
-      `;
-      if ((member[0]?.exists ?? 0) === 0) {
-        throw new Error("panel_message: not a member of the target panel");
-      }
-    }
     const content = renderTemplate(contentTemplate, ctx);
+    // TOCTOU-safe membership-gated insert: a single statement that
+    // refuses to insert when the user is no longer a panel member. The
+    // previous code did `SELECT EXISTS(...)` then `INSERT INTO messages`
+    // — the user could be removed from the panel between the two
+    // statements and still post.
+    const isAdmin = (ctx as { isAdmin?: boolean }).isAdmin === true;
+    if (isAdmin) {
+      const rows = await sql<{ id: string }[]>`
+        INSERT INTO messages (panel_id, user_id, role, content, tokens)
+        VALUES (${panelId}::uuid, ${userId}::uuid, 'user', ${content}, 0)
+        RETURNING id
+      `;
+      return `posted message ${rows[0]!.id} to panel ${panelId}`;
+    }
     const rows = await sql<{ id: string }[]>`
       INSERT INTO messages (panel_id, user_id, role, content, tokens)
-      VALUES (${panelId}::uuid, ${userId}::uuid, 'user', ${content}, 0)
+      SELECT ${panelId}::uuid, ${userId}::uuid, 'user', ${content}, 0
+      WHERE EXISTS (
+        SELECT 1 FROM panel_members
+        WHERE panel_id = ${panelId}::uuid AND user_id = ${userId}::uuid
+      )
       RETURNING id
     `;
+    if (!rows[0]) {
+      throw new Error("panel_message: not a member of the target panel");
+    }
     return `posted message ${rows[0]!.id} to panel ${panelId}`;
   }
   if (action === "http_post") {
@@ -276,6 +287,25 @@ async function dispatchAction(
     // user-supplied URLs must use 80/443.
     await assertSafeOutboundUrl(url, { allowLocal: false });
     const body = renderTemplate(JSON.stringify(cfg.body ?? ctx), ctx);
+    // Header smuggling guard — the action_config.headers block lets the
+    // user set arbitrary header values. An attacker-supplied header
+    // value containing CRLF (\r\n) could be smuggled into the response
+    // stream (HTTP response splitting) or be used to set Content-Length
+    // / Transfer-Encoding and confuse the request parser downstream.
+    // Strip CRLF (and any other control characters) from every header
+    // name + value before sending.
+    const rawHeaders = (cfg.headers as Record<string, unknown> | undefined) ?? {};
+    const safeHeaders: Record<string, string> = { "Content-Type": "application/json" };
+    for (const [k, v] of Object.entries(rawHeaders)) {
+      if (typeof v !== "string") continue;
+      const name = stripCrlf(k);
+      const value = stripCrlf(v);
+      if (!name || !value) continue;
+      // Disallow the user from overriding a few headers that affect
+      // connection semantics.
+      if (/^(host|content-length|transfer-encoding|connection)$/i.test(name)) continue;
+      safeHeaders[name] = value;
+    }
     // Use safeFetch (with a 5 MB response cap) instead of raw curl
     // streaming. Without a cap, a malicious target URL can return
     // gigabytes of body, OOMing the runner. safeFetch also disables
@@ -283,7 +313,7 @@ async function dispatchAction(
     // assertSafeOutboundUrl).
     const res = await safeFetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: safeHeaders,
       body,
       maxBytes: 5 * 1024 * 1024,
     });
@@ -466,9 +496,10 @@ export async function evaluateTriggers(
       `;
       fired++;
     } catch (err) {
+      console.warn("[watches] trigger dispatch failed:", (err as Error).message);
       await sql`
         UPDATE watch_runs
-        SET finished_at = now(), status = 'error', message = ${(err as Error).message.slice(0, 4000)}
+        SET finished_at = now(), status = 'error', message = 'trigger_action_failed'
         WHERE id = ${runId}::uuid
       `;
     }
@@ -524,4 +555,12 @@ function eq(a: unknown, b: unknown): boolean {
     return a === b;
   }
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+// Strip CR/LF/tab and any other control character from a header
+// value (or name). Prevents HTTP response splitting / header smuggling
+// when an attacker can influence header values. Also caps length.
+function stripCrlf(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/[\x00-\x1f\x7f]/g, "").slice(0, 4000);
 }

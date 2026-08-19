@@ -1,3 +1,21 @@
+# ci.yml — primary CI pipeline.
+#
+# Runs typecheck, migrations, smoke tests, lint, tests, SBOM, provenance,
+# and dependency-audit. Every job is independent so they can run
+# in parallel and short-circuit a PR without blocking the rest of
+# the matrix. Concurrency cancels superseded runs on the same ref.
+#
+# Jobs:
+#   typecheck  — `bun run typecheck` in backend + frontend (matrix)
+#   migrate    — apply migrations against a fresh Postgres + Redis
+#   smoke      — boot the api + auth flow round-trip
+#   lint       — bun run lint in both workspaces (matrix)
+#   test       — `bun test` in the backend workspace
+#   sbom       — build image, emit SBOM, upload as artifact
+#   provenance — build image with provenance attestation
+#   audit      — npm audit --audit-level=high (main only)
+#   check-csp  — grep index.html for CSP meta tags
+
 name: ci
 
 on:
@@ -6,9 +24,18 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel in-progress runs on the same branch+ref when a new commit
+# is pushed. Saves CI minutes on rapid-fire PR updates.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   typecheck:
-    name: typecheck (backend + frontend)
+    name: typecheck (${{ matrix.workspace }})
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -67,7 +94,50 @@ jobs:
           bun-version: 1.3
       - run: bun install --frozen-lockfile
       - run: bun run db:migrate
-      - run: bun run typecheck
+      - run: bun run test:bcrypt
+
+  smoke:
+    name: smoke (boot + login + /me + logout)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: helm
+          POSTGRES_PASSWORD: helm_dev
+          POSTGRES_DB: helm
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U helm"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ADMIN_USERNAME: ci_admin
+      ADMIN_PASSWORD: ci-admin-password-123
+      DATABASE_URL: postgres://helm:helm_dev@localhost:5432/helm
+      REDIS_URL: redis://localhost:6379
+      SESSION_SECRET: ci-only-secret-do-not-use-anywhere-real
+      API_PORT: "3000"
+      WEB_ORIGIN: http://localhost:5173
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3
+      - run: bun install --frozen-lockfile
+      - run: bun run db:migrate
       # Boot, confirm bootstrap seeded the admin, log in, hit /me, log out.
       - run: |
           bun run start &
@@ -88,4 +158,133 @@ jobs:
           echo
           curl -fsS -b jar -c jar -X POST http://localhost:3000/api/logout
           echo
+          # CSP report endpoint smoke — the report-only meta tag in
+          # index.html posts here on violation; the endpoint MUST
+          # accept the JSON body with 204 and never echo it back.
+          curl -fsS -o /dev/null -w '%{http_code}\n' -X POST \
+            http://localhost:3000/api/csp-report \
+            -H 'Content-Type: application/csp-report' \
+            -d '{"csp-report":{"violated-directive":"script-src","blocked-uri":"https://evil.example"}}'
           kill $SERVER_PID
+
+  lint:
+    name: lint (${{ matrix.workspace }})
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ matrix.workspace }}
+    strategy:
+      fail-fast: false
+      matrix:
+        workspace: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3
+      - run: bun install --frozen-lockfile
+      # Run `bun run lint` (eslint) in the workspace. Surface warnings
+      # (no-explicit-any, no-console, etc.) but do NOT fail on them —
+      # existing code has ~173 `any` and ~165 `console.log` usages
+      # surfaced as warnings. New code should add --max-warnings 0
+      # once those have been cleaned up. The current config sets all
+      # of those rules to `warn`, so eslint exits 0 with warnings.
+      - run: bun run lint
+
+  test:
+    name: backend tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3
+      - run: bun install --frozen-lockfile
+      # `bun test` discovers every `*.test.ts` file under src/.
+      # Today that includes role middleware, crypto providers, the
+      # response cache, panel membership, and IDOR coverage for the
+      # panel routes.
+      - run: bun test
+
+  check-csp:
+    name: CSP meta tags present in index.html
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: assert strict CSP meta tag
+        run: |
+          if ! grep -q 'http-equiv="Content-Security-Policy"' frontend/index.html; then
+            echo "::error::frontend/index.html is missing the strict Content-Security-Policy meta tag"
+            exit 1
+          fi
+      - name: assert report-only CSP meta tag
+        run: |
+          if ! grep -q 'Content-Security-Policy-Report-Only' frontend/index.html; then
+            echo "::error::frontend/index.html is missing the Content-Security-Policy-Report-Only meta tag"
+            echo "::error::without report-only mode, CSP violations cannot be observed before enforcement"
+            exit 1
+          fi
+
+  sbom:
+    name: SBOM generation (cyclonedx)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build image with SBOM + provenance attestation
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: backend/Dockerfile
+          tags: helm-api:ci
+          # sbom: true     — emit a CycloneDX SBOM alongside the image
+          # provenance: true — emit SLSA-style provenance attestations
+          # Both require BuildKit (the docker/build-push-action uses
+          # buildx, which bundles BuildKit — no extra setup required).
+          sbom: true
+          provenance: true
+          push: false
+          # Cache layers between runs keyed on the dockerfile + lockfile
+          # so unrelated PRs don't bust each other's cache.
+          cache-from: type=gha,scope=helm-api-sbom
+          cache-to: type=gha,mode=max,scope=helm-api-sbom
+      - name: Extract SBOM artifact
+        run: |
+          mkdir -p sbom-out
+          # `docker buildx sbom` ships with buildx ≥ 0.10. Pulls the
+          # SBOM from the local image (we built with --sbom=true).
+          docker buildx sbom --format cyclonedx-json --output sbom-out/helm-api.cdx.json helm-api:ci
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-helm-api
+          path: sbom-out/helm-api.cdx.json
+          retention-days: 90
+
+  audit:
+    name: npm audit (high+ only, main)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3
+      - run: bun install --frozen-lockfile
+      # bun has no audit command — fall through to npm. We pin npm
+      # to a known version because npm audit is the only signal we
+      # have for transitive deps in CI today.
+      - name: install npm for audit
+        run: npm install -g npm@10
+      - name: npm audit (high+)
+        run: npm audit --audit-level=high
