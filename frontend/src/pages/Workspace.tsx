@@ -21,6 +21,17 @@ interface MemoryEntry {
   created_at: string;
 }
 
+// Standard paginated envelope from `backend/src/lib/pagination.ts`.
+// Mirrors the backend's `PaginatedResponse<T>` so all list endpoints
+// share the same shape.
+interface Paginated<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
 interface Cron {
   id: string;
   name: string;
@@ -100,7 +111,13 @@ function MemoryTab() {
   const [text, setText] = useState({ personal: "", team: "", admin: "" });
   const isAdmin = user?.role === "admin";
 
-  const reload = () => apiGet<MemoryEntry[]>("/workspace/memory").then(setEntries);
+  // The backend returns a paginated envelope: { items, total, limit, offset, has_more }.
+  // We accept the envelope shape so pagination can be added later
+  // without breaking the consumers here.
+  const reload = () =>
+    apiGet<Paginated<MemoryEntry>>("/workspace/memory").then((res) => {
+      setEntries(res.items ?? []);
+    });
   useEffect(() => {
     reload();
   }, []);
