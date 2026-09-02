@@ -14,6 +14,7 @@ import { seedAppsIfEmpty } from "./db/seed/apps-seed.ts";
 import { seedMarketplaceIfEmpty } from "./db/seed/marketplace-seed.ts";
 import authRoutes from "./routes/auth.ts";
 import healthRoutes from "./routes/health.ts";
+import metricsRoutes from "./routes/metrics.ts";
 import providerRoutes from "./routes/providers.ts";
 import modelRoutes from "./routes/models.ts";
 import accessRoutes from "./routes/access.ts";
@@ -30,6 +31,7 @@ import harnessRoutes from "./routes/harness.ts";
 import { handlePanelUpgrade, panelWS } from "./ws.ts";
 import { rateLimit, rateLimitByBody } from "./middleware/ratelimit.ts";
 import { securityHeaders, originGuard } from "./middleware/security-headers.ts";
+import { requestMetrics } from "./middleware/metrics.ts";
 import webSearchRoutes from "./routes/websearch.ts";
 import searchRoutes from "./routes/search.ts";
 import memoryStrategyRoutes from "./routes/memory-strategies.ts";
@@ -79,6 +81,11 @@ app.use("*", compression());
 app.use("*", cachingEtag);
 
 app.use("*", logger());
+
+// Prometheus request metrics (in-flight gauge + per-route counters /
+// latency histograms). Mounted before all routes so 404s and errors
+// are counted too; scrape endpoint is admin-gated (routes/metrics.ts).
+app.use("*", requestMetrics);
 app.use(
   "*",
   cors({
@@ -376,6 +383,8 @@ app.onError((err, c) => {
 
 // Health / observability
 app.route("/api/health", healthRoutes);
+// Prometheus scrape (admin-gated; see routes/metrics.ts)
+app.route("/api/metrics", metricsRoutes);
 
 // Auth (login, logout, me, change-password, bootstrap-status) is mounted
 // LATE so the wildcard `router.use("*", requireAuth)` doesn't catch
@@ -620,4 +629,3 @@ main().catch((err) => {
 });
 
 export { app };
-// Debug logging to find which route catches /api/login

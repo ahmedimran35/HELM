@@ -104,45 +104,9 @@ router.get("/me/budgets", async (c) => {
   return c.json(rows[0] ?? { dollar_limit: null, period: "month" });
 });
 
-router.get("/analytics/spend-by-model", requireAdmin, async (c) => {
-  // Real spend from per-model token usage and pricing.
-  const rows = await sql<{
-    model_id: string | null;
-    model_name: string | null;
-    spend: number;
-    tokens: number;
-  }[]>`
-    WITH usage AS (
-      SELECT
-        m.id AS model_id,
-        m.display_name AS model_name,
-        COALESCE((a.metadata->>'prompt_tokens')::int, 0)    AS prompt_tokens,
-        COALESCE((a.metadata->>'completion_tokens')::int, 0) AS completion_tokens,
-        a.tokens AS total_tokens,
-        m.input_price_per_1k,
-        m.output_price_per_1k
-      FROM audit_log a
-      LEFT JOIN models m ON m.id::text = a.target
-      WHERE a.action IN ('chat_assistant_message', 'panel_assistant_message')
-        AND a.target IS NOT NULL
-    )
-    SELECT model_id, model_name,
-           sum(
-             CASE
-               WHEN input_price_per_1k IS NULL OR output_price_per_1k IS NULL THEN
-                 total_tokens * 0.001 / 1000
-               ELSE
-                 (prompt_tokens * input_price_per_1k +
-                  completion_tokens * output_price_per_1k) / 1000
-             END
-           )::numeric(12, 4) AS spend,
-           sum(total_tokens)::int AS tokens
-    FROM usage
-    GROUP BY model_id, model_name
-    ORDER BY spend DESC
-  `;
-  return c.json(rows);
-});
+// NOTE: /analytics/spend-by-model is registered ONCE below (with the
+// monthly window). An earlier all-time variant was shadowed by it —
+// removed as dead code; Hono keeps only the last handler per path.
 
 router.get("/analytics/messages-over-time", requireAdmin, async (c) => {
   const rows = await sql<{

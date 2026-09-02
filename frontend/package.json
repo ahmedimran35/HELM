@@ -1,6 +1,6 @@
 {
   "name": "@helm/frontend",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts,.tsx",
+    "lint:ratchet": "eslint src --ext .ts,.tsx --max-warnings 96",
     "format": "prettier --write src"
   },
   "dependencies": {

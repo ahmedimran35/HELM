@@ -143,8 +143,10 @@ async function ensureDir(path: string): Promise<void> {
  * Verify that `target` lives inside `root`. Used to defeat
  * `../`-escapes on user-supplied paths. Returns the resolved absolute
  * path on success, or `null` if the target escapes the root.
+ * Exported for unit tests — the traversal vectors it must block are
+ * the sandbox's filesystem boundary.
  */
-function safeJoin(root: string, target: string): string | null {
+export function safeJoin(root: string, target: string): string | null {
   const cleaned = target.replace(/^\/+/, "");
   const full = resolve(root, cleaned);
   const rootWithSep = root.endsWith(sep) ? root : root + sep;

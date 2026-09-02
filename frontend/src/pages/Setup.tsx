@@ -254,7 +254,7 @@ export function SetupPage() {
               Governed multiplayer AI workspace — first-run setup.
             </p>
           </div>
-          <Badge tone="brass">v0.1</Badge>
+          <Badge tone="brass">v0.2</Badge>
         </div>
         <div className="h-1 bg-panel border border-border">
           <div

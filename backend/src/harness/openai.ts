@@ -154,53 +154,65 @@ class OpenAIHarness implements Harness {
       return;
     }
     const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let promptTokens: number | undefined;
-    let completionTokens: number | undefined;
-    try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let nlIdx: number;
-        while ((nlIdx = buffer.indexOf("\n\n")) >= 0) {
-          const block = buffer.slice(0, nlIdx);
-          buffer = buffer.slice(nlIdx + 2);
-          for (const line of block.split("\n")) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith("data:")) continue;
-            const payload = trimmed.slice(5).trim();
-            if (payload === "[DONE]") {
-              yield { done: true, prompt_tokens: promptTokens, completion_tokens: completionTokens };
-              return;
+    yield* parseOpenAIStream(reader);
+  }
+}
+
+/**
+ * Parse an OpenAI-compatible SSE body into chat chunks. Exported for
+ * unit tests — the parsing (not the fetch) is the fragile part: partial
+ * frames across network reads, [DONE] sentinels, usage payloads on the
+ * final frame, and malformed JSON must all be tolerated.
+ */
+export async function* parseOpenAIStream(
+  reader: ReadableStreamDefaultReader<Uint8Array>
+): AsyncIterable<ChatChunk> {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let promptTokens: number | undefined;
+  let completionTokens: number | undefined;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let nlIdx: number;
+      while ((nlIdx = buffer.indexOf("\n\n")) >= 0) {
+        const block = buffer.slice(0, nlIdx);
+        buffer = buffer.slice(nlIdx + 2);
+        for (const line of block.split("\n")) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) continue;
+          const payload = trimmed.slice(5).trim();
+          if (payload === "[DONE]") {
+            yield { done: true, prompt_tokens: promptTokens, completion_tokens: completionTokens };
+            return;
+          }
+          try {
+            const parsed = JSON.parse(payload) as {
+              choices?: Array<{ delta?: { content?: string } }>;
+              usage?: { prompt_tokens?: number; completion_tokens?: number };
+            };
+            const piece = parsed.choices?.[0]?.delta?.content;
+            if (piece) yield { delta: piece, done: false };
+            if (parsed.usage) {
+              promptTokens = parsed.usage.prompt_tokens;
+              completionTokens = parsed.usage.completion_tokens;
             }
-            try {
-              const parsed = JSON.parse(payload) as {
-                choices?: Array<{ delta?: { content?: string } }>;
-                usage?: { prompt_tokens?: number; completion_tokens?: number };
-              };
-              const piece = parsed.choices?.[0]?.delta?.content;
-              if (piece) yield { delta: piece, done: false };
-              if (parsed.usage) {
-                promptTokens = parsed.usage.prompt_tokens;
-                completionTokens = parsed.usage.completion_tokens;
-              }
-            } catch {
-              /* ignore partial JSON */
-            }
+          } catch {
+            /* ignore partial JSON */
           }
         }
       }
-    } finally {
-      try {
-        reader.releaseLock();
-      } catch {
-        /* already released */
-      }
     }
-    yield { done: true, prompt_tokens: promptTokens, completion_tokens: completionTokens };
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      /* already released */
+    }
   }
+  yield { done: true, prompt_tokens: promptTokens, completion_tokens: completionTokens };
 }
 
 export const openaiHarness: Harness = new OpenAIHarness();

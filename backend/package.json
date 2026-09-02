@@ -1,6 +1,6 @@
 {
   "name": "@helm/backend",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,6 +12,7 @@
     "test": "bun test",
     "test:bcrypt": "bun scripts/bcrypt-compat-test.ts",
     "lint": "eslint src --ext .ts",
+    "lint:ratchet": "eslint src --ext .ts --max-warnings 208",
     "format": "prettier --write src",
     "build": "bun build src/index.ts --outdir=dist --target=bun --external @helm/shared"
   },

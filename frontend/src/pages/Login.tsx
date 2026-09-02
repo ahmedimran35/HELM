@@ -72,7 +72,7 @@ export function LoginPage() {
             <span className="mono-caps text-[11px] text-textMuted">
               Sign in
             </span>
-            <Badge tone="brass">v0.1</Badge>
+            <Badge tone="brass">v0.2</Badge>
           </div>
 
           <div className="space-y-3">

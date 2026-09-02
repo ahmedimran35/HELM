@@ -9,7 +9,7 @@
 #   typecheck  — `bun run typecheck` in backend + frontend (matrix)
 #   migrate    — apply migrations against a fresh Postgres + Redis
 #   smoke      — boot the api + auth flow round-trip
-#   lint       — bun run lint in both workspaces (matrix)
+#   lint       — lint ratchet in both workspaces (matrix, fails on new warnings)
 #   test       — `bun test` in the backend workspace
 #   sbom       — build image, emit SBOM, upload as artifact
 #   provenance — build image with provenance attestation
@@ -183,13 +183,12 @@ jobs:
         with:
           bun-version: 1.3
       - run: bun install --frozen-lockfile
-      # Run `bun run lint` (eslint) in the workspace. Surface warnings
-      # (no-explicit-any, no-console, etc.) but do NOT fail on them —
-      # existing code has ~173 `any` and ~165 `console.log` usages
-      # surfaced as warnings. New code should add --max-warnings 0
-      # once those have been cleaned up. The current config sets all
-      # of those rules to `warn`, so eslint exits 0 with warnings.
-      - run: bun run lint
+      # Lint ratchet: `lint:ratchet` runs eslint with --max-warnings
+      # pinned to the CURRENT warning count per workspace (backend:
+      # 208, frontend: 96 — see the lint:ratchet scripts). CI fails if
+      # a PR adds even one new warning. When you fix warnings, lower
+      # the number in the workspace package.json; the goal is 0.
+      - run: bun run lint:ratchet
 
   test:
     name: backend tests

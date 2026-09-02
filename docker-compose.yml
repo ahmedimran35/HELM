@@ -11,6 +11,8 @@
 #                http://lightpanda:9222 (CDP). The api auto-configures
 #                it on first boot if no provider is configured yet.
 #   api          HELM backend (Hono on Bun)
+#   web          HELM frontend (nginx serving the built SPA,
+#                reverse-proxying /api + /apps to the api)
 #
 # The api container runs migrations on startup, seeds the admin account
 # from $ADMIN_USERNAME / $ADMIN_PASSWORD, and auto-configures Lightpanda
@@ -98,7 +100,12 @@ services:
       retries: 10
 
   api:
-    build: ./backend
+    # Build context MUST be the repo root: the Dockerfile COPYs
+    # package.json + bun.lock from the root and backend/ as a
+    # subdirectory (mirroring how CI and the prod overlay build it).
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     restart: unless-stopped
     depends_on:
       postgres:
@@ -129,7 +136,7 @@ services:
       # SECURITY: no default admin password. A known-password admin account
       # on a deployed stack is a critical hole — generate one before first
       # boot:  export ADMIN_PASSWORD=$(openssl rand -base64 24)
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required — generate one with: openssl rand -base64 24}
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:?ADMIN_PASSWORD is required (generate with openssl rand -base64 24)}"
       DATABASE_URL: postgres://helm:${POSTGRES_PASSWORD:-helm_dev}@postgres:5432/helm
       REDIS_URL: redis://:${REDIS_PASSWORD:-helm_dev}@redis:6379/0
       # SESSION_SECRET intentionally empty here. The backend generates an
@@ -151,6 +158,36 @@ services:
       WEB_SEARCH_TAVILY_KEY: ${WEB_SEARCH_TAVILY_KEY:-}
     ports:
       - "3000:3000"
+
+  # HELM frontend — production SPA serving. The web container serves
+  # the built React app and reverse-proxies /api, /apps/:slug and
+  # /apps-embed?slug=... to the api (mirroring the dev vite proxy in
+  # frontend/vite.config.ts). Single-origin: the browser only talks to
+  # this container, so the session cookie stays first-party.
+  #
+  # In production, drop the api's `ports:` block above and expose the
+  # api only on the internal network — the web proxy is the only
+  # front door (see docker-compose.prod.yml).
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    environment:
+      # No runtime config needed — the SPA talks to the api over
+      # relative /api paths through this same origin.
+      NGINX_ENTRYPOINT_QUIET_LOGS: "1"
+    ports:
+      - "8080:8080"
 
 volumes:
   helm_pg:

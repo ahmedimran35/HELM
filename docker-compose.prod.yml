@@ -93,6 +93,10 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    # Prod: the api is NOT published to the host. The web proxy is the
+    # only front door; the api stays reachable on the internal compose
+    # network. (`ports: []` overrides the dev compose's 3000 mapping.)
+    ports: []
 
   # lightpanda: same as dev but hardened.
   lightpanda:
@@ -100,3 +104,43 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges]
     user: "65532:65532"
+
+  # redis: prod hardening to match postgres/api/lightpanda — the dev
+  # compose intentionally ships a throwaway default password; prod
+  # requires a real one and the container is locked down like the rest.
+  redis:
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --requirepass
+      - ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+      - --bind
+      - "0.0.0.0"
+      - --protected-mode
+      - "yes"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges]
+
+  # web: same as dev but hardened. This is the ONLY service that
+  # should be exposed to the internet — remove the api's published
+  # 3000 port and route your TLS terminator (see scripts/waf-nginx.conf)
+  # at this container's 8080.
+  web:
+    image: helm-web:prod
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:rw,noexec,nosuid,size=64m
+      - /var/run:rw,noexec,nosuid,size=16m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges]
+    user: "65532:65532"
+    ports:
+      - "8080:8080"
