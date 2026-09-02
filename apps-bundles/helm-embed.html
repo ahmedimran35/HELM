@@ -413,11 +413,20 @@
           } catch (_e) { /* ignore */ }
           hideVeil();
         } else if (data.type === "helm:navigate") {
-          // App wants to navigate somewhere; do it in the top window so
-          // we leave the embed.
+          // App wants to navigate somewhere; validate it's an internal
+          // SPA path (same validation as AppFrame.tsx) before navigating
+          // the top window. This prevents open-redirect/phishing via
+          // helm:navigate.
           if (data.path) {
-            try { window.top.location.href = String(data.path); }
-            catch (_e) { window.location.href = String(data.path); }
+            var path = String(data.path);
+            if (
+              path.length > 0 &&
+              path.length < 256 &&
+              /^\/[A-Za-z0-9_\-/.?&=]*$/.test(path)
+            ) {
+              try { window.top.location.href = path; }
+              catch (_e) { window.location.href = path; }
+            }
           }
         }
       });

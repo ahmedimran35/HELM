@@ -83,8 +83,14 @@ services:
     # CDP server on 9222 (the default). To switch to CLI mode, set
     # LIGHTPANDA_BIN=lightpanda on api and remove the ports block.
     command: ["serve", "--host", "0.0.0.0", "--port", "9222"]
-    ports:
-      - "9222:9222"
+    # SECURITY: do NOT publish port 9222 to the host. CDP (Chrome DevTools
+    # Protocol) is unauthenticated remote browser control — anyone who can
+    # reach the port can navigate the browser to internal URLs (SSRF into
+    # cloud metadata endpoints, internal services, etc.). The api service
+    # reaches lightpanda over the internal compose network at
+    # http://lightpanda:9222, so no host port mapping is needed.
+    expose:
+      - "9222"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:9222/healthz"]
       interval: 10s
@@ -120,10 +126,18 @@ services:
       # (`:?` syntax) and refuses to start without them.
       # -------------------------------------------------------------------------
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me-immediately}
+      # SECURITY: no default admin password. A known-password admin account
+      # on a deployed stack is a critical hole — generate one before first
+      # boot:  export ADMIN_PASSWORD=$(openssl rand -base64 24)
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required — generate one with: openssl rand -base64 24}
       DATABASE_URL: postgres://helm:${POSTGRES_PASSWORD:-helm_dev}@postgres:5432/helm
       REDIS_URL: redis://:${REDIS_PASSWORD:-helm_dev}@redis:6379/0
-      SESSION_SECRET: ${SESSION_SECRET:-dev-only-do-not-use-in-prod-7d2c5f8a}
+      # SESSION_SECRET intentionally empty here. The backend generates an
+      # ephemeral in-memory secret on boot (logged as a warning) so a fresh
+      # clone still boots with `docker compose up`. Set a strong value
+      # (e.g. `openssl rand -hex 32`) for any real deployment; the prod
+      # overlay requires it via `:?`.
+      SESSION_SECRET: ${SESSION_SECRET:-}
       API_PORT: "3000"
       WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:5173}
       # Live-data web search. The api shell-spawns the `lightpanda`

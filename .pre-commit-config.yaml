@@ -28,3 +28,12 @@ repos:
     hooks:
       - id: prettier
         files: \.(ts|tsx|json|md|yml|yaml)$
+  # XSS guard: apps-bundles that write innerHTML must escape interpolated
+  # values with escapeHtml(). See scripts/check-apps-xss.sh.
+  - repo: local
+    hooks:
+      - id: apps-xss-guard
+        name: apps-bundle innerHTML escape guard
+        entry: scripts/check-apps-xss.sh
+        language: script
+        files: ^apps-bundles/.*\.html$

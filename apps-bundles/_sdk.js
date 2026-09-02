@@ -21,8 +21,10 @@
 // HELM (via /apps-embed), the parent provides install info via
 // postMessage("helm:context", { install, theme }) as a fallback.
 //
-// The SDK is intentionally in a single file with no dependencies — apps
-// are sandboxed and we don't want to pull in a build step.
+// The SDK communicates with the HELM host via postMessage because the
+// iframe runs WITHOUT `allow-same-origin` (opaque origin) — it cannot
+// make direct same-origin fetch calls. All /api/* and app-data requests
+// are proxied through the host.
 
 (function () {
   "use strict";
@@ -57,15 +59,57 @@
     }
   }
 
-  // Listen for context messages from the HELM host (only relevant when
-  // the app is embedded in an iframe). The host posts { type, theme, install }
-  // on every load and again whenever the theme changes.
-  var parentTheme = null;
-  var parentInstall = null;
-  var parentReady = false;
+  // Request/response bridge for privileged API calls via postMessage.
+  // The host (AppFrame) proxies requests and replies with
+  // { type: "helm:api-response", id, status, body }.
+  var apiRequestId = 0;
+  var apiPromises = {};
+  function callApiViaBridge(method, path, body) {
+    return new Promise(function (resolve, reject) {
+      var id = "api-" + Date.now() + "-" + (++apiRequestId);
+      var timeout = setTimeout(function () {
+        delete apiPromises[id];
+        reject(new Error("api_bridge_timeout"));
+      }, 30000);
+      apiPromises[id] = { resolve: resolve, reject: reject, timeout: timeout };
+      postParent({ type: "helm:api", id: id, method: method, path: path, body: body });
+    });
+  }
+
+  function callAppDataViaBridge(op, key, value) {
+    return new Promise(function (resolve, reject) {
+      var id = "appdata-" + Date.now() + "-" + (++apiRequestId);
+      var timeout = setTimeout(function () {
+        delete apiPromises[id];
+        reject(new Error("app_data_bridge_timeout"));
+      }, 15000);
+      apiPromises[id] = { resolve: resolve, reject: reject, timeout: timeout };
+      postParent({ type: "helm:app-data", id: id, op: op, key: key, value: value });
+    });
+  }
+
   window.addEventListener("message", function (ev) {
     var data = ev.data;
     if (!data || typeof data !== "object") return;
+    // Response to our api/app-data bridge request.
+    if (data.type === "helm:api-response" || data.type === "helm:app-data-response") {
+      var promise = apiPromises[data.id];
+      if (promise) {
+        clearTimeout(promise.timeout);
+        delete apiPromises[data.id];
+        if (data.status >= 200 && data.status < 300) {
+          promise.resolve(data.body);
+        } else {
+          var err = new Error(
+            (data.body && data.body.error) || "request failed: " + data.status
+          );
+          err.status = data.status;
+          err.body = data.body;
+          promise.reject(err);
+        }
+      }
+      return;
+    }
     if (data.type === "helm:context") {
       parentReady = true;
       if (data.theme === "light" || data.theme === "dark") {
@@ -117,50 +161,24 @@
     ready: null,
 
     // ----- API proxy ---------------------------------------------------------
+    // Proxied through the HELM host via postMessage because the iframe
+    // runs without `allow-same-origin` (opaque origin) and cannot make
+    // direct same-origin fetch calls.
 
     callAPI: async function (path, opts) {
       opts = opts || {};
       // Accept "/panels", "panels", "/api/panels", or "api/panels" —
-      // always end up with `/api/<rest>`. The backend mounts every API
-      // route under /api/*; without this prefix the request 404s
-      // (e.g. /panels doesn't exist; /api/panels does).
+      // always end up with `/api/<rest>`.
       var p = String(path || "");
       if (p.charAt(0) === "/") p = p.slice(1);
       if (p.indexOf("api/") !== 0) p = "api/" + p;
       var method = (opts.method || "GET").toUpperCase();
-      var init = {
-        method: method,
-        credentials: "include",
-        headers: {
-          Accept: "application/json",
-          ...(opts.body ? { "Content-Type": "application/json" } : {}),
-        },
-      };
-      if (opts.body !== undefined) {
-        init.body = typeof opts.body === "string"
-          ? opts.body
-          : JSON.stringify(opts.body);
-      }
-      var res = await fetch("/" + p, init);
-      var text = await res.text();
-      var body = null;
-      if (text.length > 0) {
-        try { body = JSON.parse(text); } catch (_e) { body = text; }
-      }
-      if (!res.ok) {
-        var err = new Error(
-          typeof body === "object" && body && body.error
-            ? String(body.error)
-            : "request failed: " + res.status
-        );
-        err.status = res.status;
-        err.body = body;
-        throw err;
-      }
-      return body;
+      // Delegate to the host bridge.
+      return callApiViaBridge(method, "/" + p, opts.body);
     },
 
     // ----- per-install persistent state --------------------------------------
+    // Proxied through the HELM host via postMessage.
 
     data: {
       _ready: function () {
@@ -170,64 +188,19 @@
       },
       get: async function (key) {
         sdk.data._ready();
-        var url = "/api/app-data/" + encodeURIComponent(sdk.install.id) +
-                  "/" + encodeURIComponent(key);
-        var res = await fetch(url, {
-          method: "GET",
-          credentials: "include",
-          headers: { Accept: "application/json" },
-        });
-        var text = await res.text();
-        var body = text ? safeParse(text) : null;
-        if (!res.ok) throw httpError(res.status, body, text);
-        // Endpoint returns { id, value }.
-        return body && Object.prototype.hasOwnProperty.call(body, "value")
-          ? body.value
-          : null;
+        return callAppDataViaBridge("get", key);
       },
       set: async function (key, value) {
         sdk.data._ready();
-        var url = "/api/app-data/" + encodeURIComponent(sdk.install.id) +
-                  "/" + encodeURIComponent(key);
-        var res = await fetch(url, {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({ value: value }),
-        });
-        var text = await res.text();
-        var body = text ? safeParse(text) : null;
-        if (!res.ok) throw httpError(res.status, body, text);
-        return body;
+        return callAppDataViaBridge("set", key, value);
       },
       del: async function (key) {
         sdk.data._ready();
-        var url = "/api/app-data/" + encodeURIComponent(sdk.install.id) +
-                  "/" + encodeURIComponent(key);
-        var res = await fetch(url, {
-          method: "DELETE",
-          credentials: "include",
-          headers: { Accept: "application/json" },
-        });
-        if (!res.ok) {
-          var text = await res.text();
-          var body = text ? safeParse(text) : null;
-          throw httpError(res.status, body, text);
-        }
-        return true;
+        return callAppDataViaBridge("del", key);
       },
       list: async function () {
         sdk.data._ready();
-        var url = "/api/app-data/" + encodeURIComponent(sdk.install.id);
-        var res = await fetch(url, {
-          method: "GET",
-          credentials: "include",
-          headers: { Accept: "application/json" },
-        });
-        var text = await res.text();
-        var body = text ? safeParse(text) : null;
-        if (!res.ok) throw httpError(res.status, body, text);
-        return body || {};
+        return callAppDataViaBridge("list");
       },
     },
 

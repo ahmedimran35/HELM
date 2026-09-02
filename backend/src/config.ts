@@ -3,6 +3,7 @@
 
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { randomBytes } from "node:crypto";
 
 const ROOT_ENV = join(import.meta.dir, "..", "..", ".env");
 
@@ -47,6 +48,28 @@ function optional(key: string, fallback: string): string {
   return v && v.length > 0 ? v : fallback;
 }
 
+/**
+ * Resolve the session secret. If `SESSION_SECRET` is unset we generate an
+ * ephemeral, in-memory secret so the app still boots (e.g. a fresh
+ * `docker compose up`), but we warn loudly: every restart invalidates all
+ * sessions AND makes stored provider keys undecryptable. A committed
+ * *known* default secret must never ship — that would let anyone decrypt
+ * provider keys and forge session cookies. For any real deployment set
+ * `SESSION_SECRET` (e.g. `openssl rand -hex 32`).
+ */
+function resolveSessionSecret(): string {
+  const v = process.env.SESSION_SECRET;
+  if (v && v.length > 0) return v;
+  const ephemeral = randomBytes(32).toString("hex");
+  console.warn(
+    "[config] WARNING: SESSION_SECRET is not set — generated an ephemeral " +
+      "in-memory secret. Set SESSION_SECRET (e.g. `openssl rand -hex 32`) for " +
+      "any non-dev deployment; without it, sessions and encrypted provider " +
+      "keys are lost on every restart.",
+  );
+  return ephemeral;
+}
+
 export const config = {
   admin: {
     username: required("ADMIN_USERNAME"),
@@ -59,7 +82,7 @@ export const config = {
     url: optional("REDIS_URL", "redis://localhost:6379"),
   },
   session: {
-    secret: required("SESSION_SECRET"),
+    secret: resolveSessionSecret(),
     cookieName: "helm_sid",
     ttlSeconds: 60 * 60 * 24 * 7, // 7 days
   },

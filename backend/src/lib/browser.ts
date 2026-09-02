@@ -24,6 +24,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
+import { assertSafeOutboundUrl } from "./safe-fetch.ts";
 
 // Cached playwright module + browser. We only ever spin up one
 // chromium instance (the user's "agent browser") and reuse it across
@@ -66,9 +67,16 @@ async function ensureBrowser(): Promise<void> {
     } catch {
       throw new Error("playwright_not_installed");
     }
+    // Chromium's own sandbox stays ON by default. Running as root without
+    // --no-sandbox normally fails to launch; the Docker image runs the api
+    // as a non-root uid so the sandbox works. Set BROWSER_NO_SANDBOX=1 only
+    // for root dev containers that cannot use the sandbox — doing so
+    // removes an important exploit mitigation against malicious pages.
+    const args = ["--disable-dev-shm-usage", "--disable-setuid-sandbox"];
+    if (process.env.BROWSER_NO_SANDBOX === "1") args.push("--no-sandbox");
     cachedBrowser = await cachedModule.chromium.launch({
       headless: true,
-      args: ["--no-sandbox", "--disable-dev-shm-usage"],
+      args,
     });
   })();
   try {
@@ -160,6 +168,22 @@ function containsPath(root: string, candidate: string): boolean {
 
 export async function runBrowser(input: BrowserExecInput): Promise<BrowserExecOutput> {
   const start = Date.now();
+  // SSRF guard — the browser runs server-side with access to internal
+  // services and cloud metadata. Reject any non-public URL before we
+  // navigate. (Mirrors the safeFetch guard used everywhere else.)
+  try {
+    await assertSafeOutboundUrl(input.url, { allowLocal: false });
+  } catch {
+    return {
+      finalUrl: input.url,
+      title: "",
+      extracted: {},
+      screenshot: null,
+      duration_ms: Date.now() - start,
+      stub: true,
+      reason: "ssrf_blocked",
+    };
+  }
   // Short-circuit when Playwright isn't installed. The caller can
   // still surface the request with `stub: true` so the UI doesn't
   // hang. We do this *outside* the mutex so a single 503 is fast.
@@ -236,9 +260,16 @@ async function runAction(
   extracted: Record<string, string[]>,
 ): Promise<void> {
   switch (action.type) {
-    case "goto":
+    case "goto": {
+      // SSRF guard on action-level navigation too.
+      try {
+        await assertSafeOutboundUrl(action.url, { allowLocal: false });
+      } catch {
+        return;
+      }
       await page.goto(action.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
       return;
+    }
     case "click":
       await page.click(action.selector, { timeout: 10_000 });
       return;

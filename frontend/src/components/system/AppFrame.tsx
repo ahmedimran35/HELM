@@ -32,6 +32,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { XIcon } from "../ui/Icon";
 import { Button } from "../ui/Button";
 import { useToast } from "../ui/feedback/Toast";
+import { safeHref } from "../../lib/safe-href";
 
 interface AppFrameProps {
   /** App slug — matches /apps/:slug/ when the slug aligns with the bundle
@@ -56,6 +57,25 @@ interface AppFrameProps {
    */
   onClose: () => void;
 }
+
+// Incoming postMessage types from the embedded app bundle (via the SDK).
+type InboundMessage =
+  | { type: "helm:ready"; name?: string; version?: string }
+  | { type: "helm:context"; theme?: string; install?: { id: string } }
+  | { type: "helm:install"; install?: { id: string } }
+  | { type: "helm:theme"; theme: string }
+  | { type: "helm:toast"; title?: string; description?: string; tone?: string; duration?: number }
+  | { type: "helm:navigate"; path: string }
+  // SDK calls the host for privileged API access (no allow-same-origin).
+  | { type: "helm:api"; id: string; method: string; path: string; body?: unknown }
+  | { type: "helm:app-data"; id: string; op: "get" | "set" | "del" | "list"; key?: string; value?: unknown }
+  | { type: string; [k: string]: unknown };
+
+// Outgoing responses back to the app bundle.
+type OutboundMessage =
+  | { type: "helm:context"; theme: string; install: { id: string } }
+  | { type: "helm:api-response"; id: string; status: number; body: unknown }
+  | { type: "helm:app-data-response"; id: string; status: number; body: unknown };
 
 type IframeMessage =
   | { type: "helm:ready"; name?: string; version?: string }
@@ -90,52 +110,45 @@ export function AppFrame({ slug, install, appName, bundleUrl, onClose }: AppFram
     return `/apps-embed?${params.toString()}`;
   }, [slug, install, bundleUrl]);
 
-  // Listen for messages from the embedded iframe. Origin must match
-  // the host's origin — anything else (sibling iframe, popup, malicious
-  // page, or window.opener) is rejected. This blocks postMessage-based
-  // UI-spoofing (helm:toast) and route-tampering (helm:navigate) from
-  // non-iframe senders. Path field is also validated to be an internal
-  // SPA route so an attacker who can produce a same-origin message
-  // (XSS in the same window) still can't redirect the user to
-  // javascript:foo or https://evil.example.
+// Type guards for the message union.
+  function isApiMessage(msg: InboundMessage): msg is Extract<InboundMessage, { type: "helm:api" }> {
+    return msg.type === "helm:api";
+  }
+  function isAppDataMessage(msg: InboundMessage): msg is Extract<InboundMessage, { type: "helm:app-data" }> {
+    return msg.type === "helm:app-data";
+  }
   useEffect(() => {
     function onMessage(ev: MessageEvent) {
-      // Strict origin check: must be exactly the host's origin.
-      // source check on top of that — only the iframe's own contentWindow.
-      if (ev.origin !== window.location.origin) return;
-      const w = iframeRef.current?.contentWindow;
-      if (ev.source !== w) return;
+      // We only accept messages from the iframe we own.
+      if (ev.source !== iframeRef.current?.contentWindow) return;
 
-      const data = ev.data as IframeMessage | null;
+      const data = ev.data as InboundMessage | null;
       if (!data || typeof data !== "object" || typeof data.type !== "string") {
         return;
       }
+
       switch (data.type) {
-        case "helm:ready":
+        case "helm:ready": {
           setReady(true);
           setError(null);
-          // The iframe's SDK is up — re-push the latest context so
-          // it has fresh theme + install info even if it missed our
-          // initial load message (e.g. due to a slow first paint).
+          // Push fresh context to the iframe.
           try {
+            const w = iframeRef.current?.contentWindow;
             if (w) {
-              // Use the iframe's exact origin, not "*". The iframe
-              // origin is the same as the host's (we just checked) but
-              // the explicit value is what the spec requires.
-              const iframeOrigin = w.location.origin || window.location.origin;
               w.postMessage(
                 {
                   type: "helm:context",
                   theme: currentThemeRef.current,
                   install: { id: install },
                 },
-                iframeOrigin,
+                "*", // iframe is opaque origin; "*" is the only option
               );
             }
           } catch {
             /* ignore */
           }
           break;
+        }
         case "helm:toast": {
           const title = typeof data.title === "string" ? data.title : "";
           const description =
@@ -153,12 +166,7 @@ export function AppFrame({ slug, install, appName, bundleUrl, onClose }: AppFram
           });
           break;
         }
-        case "helm:navigate":
-          // The app wants to take the user somewhere else. Validate
-          // that the path is an internal SPA route — reject any
-          // cross-origin or javascript: URL. Then emit an event the
-          // host page can listen for; the default action is to call
-          // window.location.href = path, but the host can intercept.
+        case "helm:navigate": {
           if (
             typeof data.path === "string" &&
             data.path.length > 0 &&
@@ -170,14 +178,16 @@ export function AppFrame({ slug, install, appName, bundleUrl, onClose }: AppFram
             );
           }
           break;
-        case "helm:context":
-        case "helm:install":
-        case "helm:theme":
-          // Informational; we don't need to act on these.
+        }
+        default: {
+          if (isApiMessage(data)) {
+            handleApiRequest(data);
+          } else if (isAppDataMessage(data)) {
+            handleAppDataRequest(data);
+          }
+          // "helm:context", "helm:install", "helm:theme" are informational; ignore.
           break;
-        default:
-          // Ignore unknown messages.
-          break;
+        }
       }
     }
     window.addEventListener("message", onMessage);
@@ -227,26 +237,18 @@ export function AppFrame({ slug, install, appName, bundleUrl, onClose }: AppFram
     return () => window.removeEventListener("helm:theme", onTheme as EventListener);
   }, [install, mountedKey]);
 
-  // When the iframe loads, push our context. The embed HTML also pushes
-  // its own context, but doing it again here is belt-and-braces for
-  // any embed-page version that forgets.
+  // When the iframe loads, push our context.
   const handleIframeLoad = useCallback(() => {
     try {
       const w = iframeRef.current?.contentWindow;
       if (w) {
-        // Pin the target origin to the iframe's own origin rather than
-        // "*". The browser will refuse to deliver the message to a
-        // different origin, which prevents the context (theme +
-        // install id) from leaking if the iframe is ever navigated
-        // somewhere hostile.
-        const iframeOrigin = w.location.origin || window.location.origin;
         w.postMessage(
           {
             type: "helm:context",
             theme: currentThemeRef.current,
             install: { id: install },
           },
-          iframeOrigin,
+          "*",
         );
       }
     } catch {
@@ -254,11 +256,125 @@ export function AppFrame({ slug, install, appName, bundleUrl, onClose }: AppFram
     }
   }, [install]);
 
+  // Proxy an authenticated /api/* request from the sandboxed app.
+  const handleApiRequest = useCallback(
+    async (msg: Extract<InboundMessage, { type: "helm:api" }>) => {
+      const { id, method, path, body } = msg;
+      // Validate: only /api/* paths, standard methods.
+      if (
+        typeof path !== "string" ||
+        !path.startsWith("/api/") ||
+        !["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"].includes(method)
+      ) {
+        postResponse(id, 400, { error: "invalid_api_path_or_method" });
+        return;
+      }
+      try {
+        const res = await fetch(path, {
+          method,
+          credentials: "include",
+          headers: {
+            Accept: "application/json",
+            ...(body ? { "Content-Type": "application/json" } : {}),
+          },
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        const text = await res.text();
+        let parsed: unknown = null;
+        if (text.length > 0) {
+          try {
+            parsed = JSON.parse(text);
+          } catch {
+            parsed = text;
+          }
+        }
+        postResponse(id, res.status, parsed);
+      } catch (err) {
+        postResponse(id, 502, { error: "api_proxy_failed", detail: String(err) });
+      }
+    },
+    [],
+  );
+
+  // Proxy per-install app-data CRUD.
+  const handleAppDataRequest = useCallback(
+    async (msg: Extract<InboundMessage, { type: "helm:app-data" }>) => {
+      const { id, op, key, value } = msg;
+      if (!key || typeof key !== "string") {
+        postResponse(id, 400, { error: "key_required" });
+        return;
+      }
+      try {
+        let path = `/api/app-data/${encodeURIComponent(install)}/${encodeURIComponent(key)}`;
+        let method: string;
+        let body: string | undefined;
+        switch (op) {
+          case "get":
+            method = "GET";
+            break;
+          case "set":
+            method = "POST";
+            body = JSON.stringify({ value });
+            break;
+          case "del":
+            method = "DELETE";
+            break;
+          case "list":
+            path = `/api/app-data/${encodeURIComponent(install)}`;
+            method = "GET";
+            break;
+          default:
+            postResponse(id, 400, { error: "unknown_op" });
+            return;
+        }
+        const res = await fetch(path, {
+          method,
+          credentials: "include",
+          headers: {
+            Accept: "application/json",
+            ...(body ? { "Content-Type": "application/json" } : {}),
+          },
+          body,
+        });
+        const text = await res.text();
+        let parsed: unknown = null;
+        if (text.length > 0) {
+          try {
+            parsed = JSON.parse(text);
+          } catch {
+            parsed = text;
+          }
+        }
+        postResponse(id, res.status, parsed);
+      } catch (err) {
+        postResponse(id, 502, { error: "app_data_proxy_failed", detail: String(err) });
+      }
+    },
+    [install],
+  );
+
+  function postResponse(id: string, status: number, body: unknown) {
+    try {
+      const w = iframeRef.current?.contentWindow;
+      if (w) {
+        w.postMessage(
+          { type: "helm:api-response", id, status, body },
+          "*",
+        );
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
   // The sandbox keeps the app honest: it can run scripts and post forms
   // back to itself, but cannot navigate the top window or open popups.
-  // `allow-same-origin` is required for the SDK to make same-origin
-  // fetch calls to /api/*.
-  const sandbox = "allow-scripts allow-same-origin allow-forms";
+  // `allow-same-origin` is REMOVED — without it, the iframe gets an
+  // opaque origin and cannot access the parent's DOM, localStorage,
+  // cookies, or make same-origin fetch calls. The SDK communicates
+  // via postMessage to a privileged bridge in this component (see
+  // handleApiRequest / handleAppDataRequest) for scoped /api/* access.
+  const sandbox = "allow-scripts allow-forms";
 
   return (
     <div key={mountedKey} className="flex flex-col h-full bg-bg" data-app-frame={slug}>

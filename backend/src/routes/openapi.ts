@@ -20,7 +20,7 @@ import { sql } from "../db/client.ts";
 import { config } from "../config.ts";
 import { verifyPassword, hashPassword } from "../auth/password.ts";
 import { createSession, revokeSession } from "../auth/session.ts";
-import { requireAuth, serializeSessionCookie, clearSessionCookie } from "../middleware/auth.ts";
+import { requireAuth, serializeSessionCookie, clearSessionCookie, isSecureRequest } from "../middleware/auth.ts";
 import { logAudit } from "../lib/audit.ts";
 import { safeError } from "../lib/safe-error.ts";
 import { listHarnessHealth, refreshAllHarnesses } from "../lib/health-check.ts";
@@ -219,8 +219,7 @@ export function buildOpenAPIRouter(): OpenAPIHono {
       const ua = c.req.header("user-agent") ?? null;
       const session = await createSession({ userId: row.id, ip, userAgent: ua });
       await logAudit({ userId: row.id, target: "auth", action: "login_success" });
-      const reqUrl = new URL(c.req.url);
-      const isHttps = reqUrl.protocol === "https:";
+      const isHttps = isSecureRequest(c.req.url, (k) => c.req.header(k));
       c.header(
         "Set-Cookie",
         serializeSessionCookie(session.id, {
@@ -257,7 +256,7 @@ export function buildOpenAPIRouter(): OpenAPIHono {
       if (user) {
         await logAudit({ userId: user.id, target: "auth", action: "logout" });
       }
-      const isHttps = c.req.url.startsWith("https://");
+      const isHttps = isSecureRequest(c.req.url, (k) => c.req.header(k));
       c.header("Set-Cookie", clearSessionCookie(isHttps), { append: true });
       return c.json({ ok: true }, 200);
     },

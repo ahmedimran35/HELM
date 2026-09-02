@@ -36,7 +36,7 @@
 //     create a new local user with a generated password + must_change_password=true.
 
 import { Hono } from "hono";
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { sql } from "../db/client.ts";
 import { config } from "../config.ts";
 import { requireAuth } from "../middleware/auth.ts";
@@ -44,7 +44,7 @@ import { encryptSecret } from "../lib/crypto.ts";
 import { hashPassword } from "../auth/password.ts";
 import { generateOneTimePassword } from "../lib/ids.ts";
 import { createSession } from "../auth/session.ts";
-import { serializeSessionCookie } from "../middleware/auth.ts";
+import { serializeSessionCookie, isSecureRequest } from "../middleware/auth.ts";
 import { logAudit } from "../lib/audit.ts";
 
 const router = new Hono();
@@ -527,7 +527,7 @@ router.get("/callback", async (c) => {
     const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
     const ua = c.req.header("user-agent") ?? null;
     const session = await createSession({ userId: targetUserId, ip, userAgent: ua });
-    const isHttps = c.req.url.startsWith("https://");
+    const isHttps = isSecureRequest(c.req.url, (k) => c.req.header(k));
     c.header(
       "Set-Cookie",
       serializeSessionCookie(session.id, {
@@ -564,14 +564,31 @@ async function createLocalUserFromOAuth(
   const password = generateOneTimePassword(14);
   const hash = await hashPassword(password);
 
-  const inserted = await sql<{ id: string }[]>`
-    INSERT INTO users (name, username, password_hash, role, must_change_password, is_active)
-    VALUES (${displayName}, ${username}, ${hash}, 'user', TRUE, TRUE)
-    ON CONFLICT (username) DO UPDATE
-      SET name = EXCLUDED.name
-    RETURNING id
-  `;
-  return inserted[0]!.id;
+  // SECURITY: never reuse an existing row on a username collision. The
+  // previous `ON CONFLICT (username) DO UPDATE ... RETURNING id` returned
+  // the *victim's* id when an attacker's OAuth identity collided with a
+  // real username (e.g. email local-part `admin`), which linked the
+  // attacker's identity to the victim and let them log in as them. We now
+  // insert a brand-new user, uniquifying the username on collision.
+  const suffix = randomUUID().slice(0, 8);
+  const candidates = [username, `${username}-${suffix}`];
+  for (const candidate of candidates) {
+    try {
+      const inserted = await sql<{ id: string }[]>`
+        INSERT INTO users (name, username, password_hash, role, must_change_password, is_active)
+        VALUES (${displayName}, ${candidate}, ${hash}, 'user', TRUE, TRUE)
+        RETURNING id
+      `;
+      return inserted[0]!.id;
+    } catch (err) {
+      // 23505 = unique_violation on the username column. Retry with the
+      // uniquified candidate; give up on any other error.
+      const code = (err as { code?: string }).code;
+      if (code === "23505" && candidate !== candidates[candidates.length - 1]) continue;
+      throw err;
+    }
+  }
+  throw new Error("failed to allocate a unique username for OAuth signup");
 }
 
 // ─────────────────────────────────────────────────────────────────────

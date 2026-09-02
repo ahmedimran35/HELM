@@ -8,7 +8,7 @@ import { sql } from "../db/client.ts";
 import { config } from "../config.ts";
 import { verifyPassword, hashPassword } from "../auth/password.ts";
 import { createSession, revokeSession } from "../auth/session.ts";
-import { requireAuth, serializeSessionCookie, clearSessionCookie } from "../middleware/auth.ts";
+import { requireAuth, serializeSessionCookie, clearSessionCookie, isSecureRequest } from "../middleware/auth.ts";
 import { logAudit } from "../lib/audit.ts";
 import { safeError } from "../lib/safe-error.ts";
 import { passwordIsStrong } from "../lib/validate.ts";
@@ -130,11 +130,9 @@ router.post("/login", async (c) => {
     action: "login_success",
   });
 
-  // Secure cookie only when serving over https. We also accept the
-  // config.web.origin hostname (when it parses to https://) as a hint
-  // that the SPA is fronted by TLS.
-  const reqUrl = new URL(c.req.url);
-  const isHttps = reqUrl.protocol === "https:";
+  // Secure cookie only when the request actually reached the user over
+  // TLS (honours X-Forwarded-Proto when behind a trusted proxy).
+  const isHttps = isSecureRequest(c.req.url, (k) => c.req.header(k));
   c.header(
     "Set-Cookie",
     serializeSessionCookie(session.id, {
@@ -164,7 +162,7 @@ router.post("/logout", async (c) => {
       action: "logout",
     });
   }
-  const isHttps = c.req.url.startsWith("https://");
+  const isHttps = isSecureRequest(c.req.url, (k) => c.req.header(k));
   c.header("Set-Cookie", clearSessionCookie(isHttps), { append: true });
   return c.json({ ok: true });
 });

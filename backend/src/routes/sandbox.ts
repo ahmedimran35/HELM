@@ -77,7 +77,6 @@
 import { Hono } from "hono";
 import { join, resolve, sep } from "node:path";
 import { mkdir, rm, stat, readdir, writeFile, readFile, lstat } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { existsSync } from "node:fs";
 import { sql } from "../db/client.ts";
 import { requireAuth } from "../middleware/auth.ts";
@@ -93,6 +92,12 @@ router.use("*", requireAuth);
 // hosts (which lack unshare(1)) keep working — the kernel-mode primitives
 // we want are Linux-only.
 const USE_UNSHARE = process.env.SANDBOX_USE_UNSHARE === "1";
+// Escape hatch for single-user dev boxes (e.g. macOS, which lacks
+// unshare(1)): SANDBOX_ALLOW_UNSAFE_EXEC=1 re-enables the plain
+// `bash -c` path. NEVER set this on a multi-tenant or production
+// deployment — the basic path can read host files and other users'
+// sandbox dirs.
+const ALLOW_UNSAFE_EXEC = process.env.SANDBOX_ALLOW_UNSAFE_EXEC === "1";
 const ISOLATION_MODE: "basic" | "unshare" = USE_UNSHARE ? "unshare" : "basic";
 // One-time boot-time log so operators can confirm which isolation path
 // is active without poking at every exec response.
@@ -101,7 +106,9 @@ const ISOLATION_MODE: "basic" | "unshare" = USE_UNSHARE ? "unshare" : "basic";
   console.log(
     USE_UNSHARE
       ? "[sandbox] isolation mode: unshare + net-ns"
-      : "[sandbox] isolation mode: bash + env-strip",
+      : ALLOW_UNSAFE_EXEC
+        ? "[sandbox] WARNING: UNSAFE exec enabled (SANDBOX_ALLOW_UNSAFE_EXEC=1) — no namespace isolation"
+        : "[sandbox] exec disabled (set SANDBOX_USE_UNSHARE=1 for namespace isolation)",
   );
 }
 
@@ -321,6 +328,23 @@ router.post("/sessions/:id/end", async (c) => {
 router.post("/sessions/:id/exec", async (c) => {
   const user = c.get("user");
   const id = c.req.param("id");
+  // Isolation gate: the default `bash -c` path is NOT a jail — there is
+  // no chroot, unshare, seccomp, or capability drop (see the file
+  // header). Any user could read host files (including .env) or other
+  // users' sandboxes. Refuse exec for EVERYONE (admins included — a
+  // hijacked admin session must not yield host RCE) unless the hardened
+  // `unshare` namespace isolation is enabled, or the operator has
+  // explicitly opted into the unsafe path via SANDBOX_ALLOW_UNSAFE_EXEC=1
+  // (single-user dev boxes only).
+  if (!USE_UNSHARE && !ALLOW_UNSAFE_EXEC) {
+    return c.json(
+      {
+        error: "sandbox_isolation_required",
+        hint: "enable SANDBOX_USE_UNSHARE=1 (Linux) or, on single-user dev hosts only, SANDBOX_ALLOW_UNSAFE_EXEC=1",
+      },
+      403,
+    );
+  }
   let body: { cmd?: string; stdin?: string; timeout_ms?: number };
   try {
     body = validate(await c.req.json().catch(() => ({})), {
@@ -349,6 +373,12 @@ router.post("/sessions/:id/exec", async (c) => {
   const timeoutMs = body.timeout_ms ?? DEFAULT_TIMEOUT_MS;
   const cwd = sandboxDir(user.id);
   await ensureDir(cwd);
+  // Per-session private TMPDIR. Previously TMPDIR pointed at the shared
+  // host tmpdir(), which let sandboxed commands snoop on (or clobber)
+  // other processes' temp files. Anchor it inside the session scratch
+  // dir instead so `/tmp`-style usage stays within the sandbox tree.
+  const sessionTmp = join(sessionDir(user.id, id), "tmp");
+  await ensureDir(sessionTmp);
 
   const startedAt = Date.now();
   // Pick the spawn command based on the SANDBOX_USE_UNSHARE flag.
@@ -388,7 +418,7 @@ router.post("/sessions/:id/exec", async (c) => {
       // the user's sandbox dir so `~` expansions stay inside.
       PATH: process.env.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin",
       HOME: cwd,
-      TMPDIR: tmpdir(),
+      TMPDIR: sessionTmp,
       // Hint the cap. Not enforced — see file header.
       HELM_SANDBOX_MEM_BUDGET_MB: "256",
     },

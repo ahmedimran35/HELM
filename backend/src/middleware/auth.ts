@@ -83,10 +83,19 @@ export const requireAuth: MiddlewareHandler = async (c, next) => {
 
 export function parseSessionCookie(header: string): string | null {
   if (!header) return null;
+  const cookieName = config.session.cookieName;
   const parts = header.split(";").map((p) => p.trim());
   for (const part of parts) {
-    if (part.startsWith(`${config.session.cookieName}=`)) {
-      return decodeURIComponent(part.slice(config.session.cookieName.length + 1));
+    // The cookie may be set with the `__Host-` prefix (when Secure) or
+    // without it (non-secure). Match either form — the previous parser
+    // only matched `helm_sid=` and silently failed to parse the
+    // `__Host-helm_sid=` name the serializer emits, which broke auth
+    // entirely on direct-TLS deployments.
+    if (part.startsWith(`${cookieName}=`)) {
+      return decodeURIComponent(part.slice(cookieName.length + 1));
+    }
+    if (part.startsWith(`__Host-${cookieName}=`)) {
+      return decodeURIComponent(part.slice(`__Host-${cookieName}`.length + 1));
     }
   }
   return null;
@@ -122,4 +131,31 @@ export function clearSessionCookie(secure: boolean): string {
   ];
   if (secure) attrs.push("Secure");
   return attrs.join("; ");
+}
+
+/**
+ * Whether the request actually reached the user over TLS.
+ *
+ * When `HELM_TRUSTED_PROXY=1` (the standard nginx/LB TLS-termination
+ * topology) we trust the `X-Forwarded-Proto` header; otherwise we trust
+ * only the immediate connection's scheme, because a client can spoof
+ * `X-Forwarded-*`. This drives the `Secure` + `__Host-` cookie flags so
+ * they are set correctly even when Bun sits behind a TLS-terminating
+ * proxy (previously the cookie was never marked Secure in that topology,
+ * and the `__Host-` prefix was never matched on parse).
+ */
+export function isSecureRequest(
+  reqUrl: string,
+  getHeader: (name: string) => string | undefined,
+): boolean {
+  const trustProxy = process.env.HELM_TRUSTED_PROXY === "1";
+  if (trustProxy) {
+    const proto = getHeader("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
+    return proto === "https";
+  }
+  try {
+    return new URL(reqUrl).protocol === "https:";
+  } catch {
+    return false;
+  }
 }

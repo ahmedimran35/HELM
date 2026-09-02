@@ -65,7 +65,10 @@ It is **not** a thin wrapper over OpenAI. HELM ships:
 git clone https://github.com/your-org/helm.git
 cd helm
 cp .env.example .env
-# edit .env if you want to override ADMIN_USERNAME / ADMIN_PASSWORD
+# REQUIRED: set a strong admin password in .env before first boot —
+# there is intentionally no default (a known-password admin account is
+# a critical hole on any deployed stack).
+echo "ADMIN_PASSWORD=$(openssl rand -base64 24)" >> .env
 docker compose up -d
 # visit http://localhost:5173 — log in with admin@helm.local / the password in .env
 ```
