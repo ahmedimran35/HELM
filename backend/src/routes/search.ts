@@ -74,11 +74,6 @@ function normalise(q: string): string {
   return q.trim().toLowerCase();
 }
 
-function matches(text: string, q: string): boolean {
-  if (!q) return true;
-  return text.toLowerCase().includes(q);
-}
-
 // Naive ranking: starts-with > contains.
 function rankScore(text: string, q: string): number {
   if (!q) return 0;
@@ -319,11 +314,6 @@ function snippet(content: string, needle: string, contextChars = 60): string {
   const start = Math.max(0, idx - contextChars);
   const end = Math.min(content.length, idx + needle.length + contextChars);
   return (start > 0 ? "…" : "") + content.slice(start, end) + (end < content.length ? "…" : "");
-}
-
-interface UniversalHit {
-  group: GroupKind;
-  results: GroupResult[];
 }
 
 router.get("/universal", async (c) => {

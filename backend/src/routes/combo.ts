@@ -30,6 +30,7 @@ import { requireAuth } from "../middleware/auth.ts";
 import { logAudit } from "../lib/audit.ts";
 import { validate, validationErrorResponse } from "../lib/validate.ts";
 import { safeError } from "../lib/safe-error.ts";
+import { rawConsole } from "../lib/log.ts";
 
 const router = new Hono();
 router.use("*", requireAuth);
@@ -102,7 +103,7 @@ router.get("/kg/:entity/citations", async (c) => {
     });
   } catch (err) {
     // Table may not exist on a fresh DB — return empty.
-    console.warn("[combo] kg citations unavailable:", (err as Error).message);
+    rawConsole.warn("[combo] kg citations unavailable:", (err as Error).message);
     return c.json({
       entity,
       count: 0,
@@ -160,7 +161,7 @@ router.post("/voice-workflow-trigger", async (c) => {
     // Voice table may not exist on a tier that hasn't migrated yet.
     // We still want the workflow trigger to succeed so the chat /
     // panel flow keeps working.
-    console.warn("voice_recordings insert skipped:", (err as Error).message);
+    rawConsole.warn("voice_recordings insert skipped:", (err as Error).message);
   }
   await logAudit({
     userId: user.id,
@@ -278,7 +279,7 @@ router.get("/spend-caps", async (c) => {
       last_hour_user_spend_cents: Math.round(Number(last[0]?.total ?? 0) * 100),
     });
   } catch (err) {
-    console.warn("[combo] spend-caps unavailable:", (err as Error).message);
+    rawConsole.warn("[combo] spend-caps unavailable:", (err as Error).message);
     return c.json({
       panels: [],
       caps_with_warning: 0,
@@ -361,7 +362,7 @@ router.post("/self-test-rerun", async (c) => {
     `;
     storedId = inserted[0]?.id ?? null;
   } catch (err) {
-    console.warn("self_test_results insert skipped:", (err as Error).message);
+    rawConsole.warn("self_test_results insert skipped:", (err as Error).message);
   }
   await logAudit({
     userId: user.id,
@@ -415,7 +416,7 @@ router.post("/feedback", async (c) => {
         SET rating = EXCLUDED.rating, reason = EXCLUDED.reason
     `;
   } catch (err) {
-    console.warn("[combo] feedback insert failed:", (err as Error).message);
+    rawConsole.warn("[combo] feedback insert failed:", (err as Error).message);
     return safeError(c, err, { status: 500, code: "feedback_failed", publicMessage: "Failed to record feedback" });
   }
   let rerun: { passed: boolean; checks: unknown[] } | null = null;
@@ -442,7 +443,7 @@ router.post("/feedback", async (c) => {
           VALUES (${body.message_id}::uuid, ${sql.json(checks as never)}, ${passed})
         `;
       } catch (err) {
-        console.warn("self_test insert skipped:", (err as Error).message);
+        rawConsole.warn("self_test insert skipped:", (err as Error).message);
       }
       rerun = { passed, checks };
     }
@@ -502,7 +503,7 @@ router.get("/presence", async (c) => {
       })),
     });
   } catch (err) {
-    console.warn("[combo] presence unavailable:", (err as Error).message);
+    rawConsole.warn("[combo] presence unavailable:", (err as Error).message);
     return c.json({
       panel_id: panelId,
       members: [],

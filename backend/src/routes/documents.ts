@@ -76,10 +76,17 @@ router.post("/generate", async (c) => {
   const sections = Array.isArray(body.sections) ? body.sections : [];
   let panelId: string | null = null;
   if (body.panel_id) {
-    const exists = await sql<{ id: string }[]>`
-      SELECT id FROM panels WHERE id = ${body.panel_id}::uuid LIMIT 1
+    // Membership check (admins bypass) — mirrors files.ts / voice.ts.
+    // Existence alone would let any user attach a document to any panel
+    // by guessing its UUID, exposing the association to panel members.
+    const exists = await sql<{ exists: number }[]>`
+      SELECT EXISTS (
+        SELECT 1 FROM panel_members
+        WHERE panel_id = ${body.panel_id}::uuid AND user_id = ${user.id}::uuid
+      )::int AS exists
     `;
-    if (!exists[0]) return c.json({ error: "panel not found" }, 404);
+    const allowed = user.role === "admin" || (exists[0]?.exists ?? 0) > 0;
+    if (!allowed) return c.json({ error: "panel not found or not a member" }, 404);
     panelId = body.panel_id;
   }
   const result = await generateDocument({
@@ -322,7 +329,7 @@ async function generateDocx(
 function docxFallback(
   title: string,
   sections: Section[],
-  fallback: string,
+  _fallback: string,
 ): GenerationResult {
   // Real .docx is a zip; without the lib we emit a plain-text blob
   // with a .docx extension and mark stub=true. The UI surfaces this
@@ -370,7 +377,7 @@ async function generateXlsx(
 function xlsxFallback(
   title: string,
   sections: Section[],
-  fallback: string,
+  _fallback: string,
 ): GenerationResult {
   // Tab-separated text — Excel and Numbers both open .tsv cleanly.
   const lines: string[] = [title.replace(/\t/g, " ")];

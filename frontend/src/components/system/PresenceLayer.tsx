@@ -63,7 +63,6 @@ export function PresenceLayer({
   panelId,
   currentUserId,
   ws,
-  members,
   scrollRef,
   messageRefs,
 }: Props) {

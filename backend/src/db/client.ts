@@ -25,7 +25,7 @@
 
 import postgres from "postgres";
 import { config } from "../config.ts";
-import { isLogEnabled } from "../lib/log.ts";
+import { isLogEnabled, rawConsole } from "../lib/log.ts";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -82,7 +82,7 @@ export async function timed<T>(
   } finally {
     const ms = Date.now() - start;
     if (ms >= SLOW_QUERY_MS && isLogEnabled("warn")) {
-      console.warn(`[db-slow] ${ms}ms ${label}`);
+      rawConsole.warn(`[db-slow] ${ms}ms ${label}`);
     }
   }
 }

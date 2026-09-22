@@ -279,7 +279,6 @@ export async function smartSearch(
   const merged: WebSearchHit[] = [];
   const seen = new Set<string>();
   let primary: WebSearchResult | null = null;
-  let primaryTier = "";
   for (const s of settled) {
     if (s.status !== "fulfilled" || !s.value.result) continue;
     const { name, result } = s.value;
@@ -288,7 +287,6 @@ export async function smartSearch(
     // answer blob (if any) goes to the model verbatim.
     if (!primary && result.results.length > 0) {
       primary = result;
-      primaryTier = name;
     }
     for (const hit of result.results) {
       if (seen.has(hit.url)) continue;
@@ -621,7 +619,7 @@ function looksBlocked(html: string): boolean {
 function extractBraveAnswer(html: string): string | null {
   // The AI answer is in a <div> or <p> with class containing "answer" or
   // right after an "AI-generated" marker.
-  const m = html.match(/AI[\u2010-\u2015\-]?generated[\s\S]{0,200}?<\/[^>]+>\s*<([a-z]+)[^>]*>([\s\S]{120,1500}?)<\/\1>/i);
+  const m = html.match(/AI[\u2010-\u2015-]?generated[\s\S]{0,200}?<\/[^>]+>\s*<([a-z]+)[^>]*>([\s\S]{120,1500}?)<\/\1>/i);
   if (m) return stripTags(m[2] ?? "").trim();
   return null;
 }

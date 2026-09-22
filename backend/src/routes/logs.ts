@@ -13,7 +13,6 @@ import { sql } from "../db/client.ts";
 import { requireAuth } from "../middleware/auth.ts";
 import { requireAdmin } from "../middleware/role.ts";
 import { verifyPassword } from "../auth/password.ts";
-import { config } from "../config.ts";
 
 const router = new Hono();
 router.use("*", requireAuth);

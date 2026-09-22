@@ -9,16 +9,13 @@
 
 import { useMemo, useState } from "react";
 import {
-  LightningIcon,
   PlayIcon,
-  SearchIcon,
   TrashIcon,
   XIcon,
 } from "../../components/ui/Icon";
 import { Input } from "../../components/ui/Input";
 import { SideSheet, SheetTabs } from "../../components/ui/layout/SideSheet";
 import {
-  INSPECTOR_WIDTH_PX,
   NODE_KIND_META,
   PREDICATE_OPS,
 } from "./constants";
@@ -81,7 +78,7 @@ export function Inspector({
       ];
     }
     return [{ id: "parameters" as TabId, label: "Workflow" }];
-  }, [selectedNode, selectedEdge]);
+  }, [selectedNode, selectedEdge, lastRun]);
 
   const title = selectedNode
     ? NODE_KIND_META[selectedNode.kind].label
@@ -590,12 +587,17 @@ function NodeKindFields({
       return (
         <div>
           <div className="mono-caps text-[9px] text-textFaint tracking-wider mb-1">
-            PATH (e.g. $.output)
+            PATH (e.g. text, body.status)
           </div>
+          <p className="text-[10px] text-textMuted mb-1.5">
+            Resolves against the upstream node&apos;s output. Prefix
+            with the node id (e.g. &apos;a1.text&apos;) or omit for
+            the direct source&apos;s root.
+          </p>
           <Input
             value={(cfg.path as string) ?? ""}
             onChange={(e) => onChange({ path: e.target.value })}
-            placeholder="$.output"
+            placeholder="text"
             name="condition-path"
           />
         </div>

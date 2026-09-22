@@ -1,5 +1,12 @@
 # Security Re-Score — pushing HELM to 9.5/10
 
+> **This is a self-assessment, not an independent audit.** The scores
+> below were written by the same project that the document grades, and
+> have not been verified by a third party. Treat them as a change log
+> of what each hardening push attempted, not as a measured posture.
+> The current known status of the sandbox is documented in
+> `SANDBOX-ISOLATION.md` and `HARDENING.md`.
+
 > Companion to `HARDENING.md`. Captures the deltas landed in this
 > hardening push (sandbox isolation, egress lockdown, WAF, backup
 > drill, deep health, IP-bind session rotation) and the residual 0.5

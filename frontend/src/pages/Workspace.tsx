@@ -150,7 +150,7 @@ function MemoryTab() {
         text={text.personal}
         onTextChange={(t) => setText({ ...text, personal: t })}
         onAdd={() => add("personal")}
-        canDelete={(e) => true}
+        canDelete={() => true}
         onDelete={del}
         accent="brass"
         badgeLabel="personal"

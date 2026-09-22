@@ -20,11 +20,12 @@ import { Hono } from "hono";
 import { sql } from "../db/client.ts";
 import { requireAuth } from "../middleware/auth.ts";
 import { logAudit } from "../lib/audit.ts";
-import { sanitizeContentDispositionFilename, UnsafeFilenameError } from "../lib/safe-filename.ts";
+import { sanitizeContentDispositionFilename } from "../lib/safe-filename.ts";
 import { getHarnessByKind } from "../harness/router.ts";
 import { mockHarness } from "../harness/mock.ts";
 import type { HarnessMessage } from "../harness/types.ts";
 import { logSecurityEvent } from "../lib/security-events.ts";
+import { rawConsole } from "../lib/log.ts";
 
 const router = new Hono();
 router.use("*", requireAuth);
@@ -483,7 +484,7 @@ async function transcribeAudio(
   } catch (err) {
     // Don't leak the underlying error message — the transcript lands
     // in the DB and is returned to the client via the file metadata.
-    console.warn("[files] whisper failed:", (err as Error).message);
+    rawConsole.warn("[files] whisper failed:", (err as Error).message);
     return {
       text: "[whisper failed: transcription error]",
       duration_ms: estimateAudioDuration(bytes.byteLength, mime),
@@ -523,7 +524,7 @@ async function summariseText(
   }
 }
 
-function decodeTextLike(bytes: Uint8Array, mime: string): string {
+function decodeTextLike(bytes: Uint8Array, _mime: string): string {
   // Cheap decoding — try UTF-8 first, fall back to latin1. Anything
   // binary (PDF, docx) will not decode meaningfully; the caller can
   // fall back to a stub.
@@ -637,7 +638,7 @@ async function runChatText(
   } catch (err) {
     // Don't leak the underlying error message — the summary lands in
     // the DB and is returned to the client via the file metadata.
-    console.warn("[files] openai fetch failed:", (err as Error).message);
+    rawConsole.warn("[files] openai fetch failed:", (err as Error).message);
     return {
       text: "[openai fetch failed: model error]",
       stub: true,

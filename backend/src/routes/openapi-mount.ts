@@ -8,6 +8,8 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { swaggerUI } from "@hono/swagger-ui";
 import { buildOpenAPIRouter } from "./openapi.ts";
+import { requireAuth } from "../middleware/auth.ts";
+import { requireAdmin } from "../middleware/role.ts";
 
 const info = {
   title: "Helm Backend API",
@@ -37,6 +39,13 @@ export function buildOpenAPIDocsApp(): OpenAPIHono {
   // — we then re-mount that registry under our docs app.
   const registry = buildOpenAPIRouter();
   const app = new OpenAPIHono();
+  // SECURITY: `registry` contains *working* mirror handlers (login,
+  // provider CRUD, model grants, …) — not just static metadata. Mounted
+  // publicly, `/api/_docs/*` was therefore an unauthenticated, admin-level
+  // API surface. Gate the whole docs app: session + admin role, enforced
+  // before any mirrored handler can run.
+  app.use("*", requireAuth);
+  app.use("*", requireAdmin);
   app.route("/", registry);
   // doc31 generates an OpenAPI 3.1 document at the given path.
   app.doc31("/openapi.json", {

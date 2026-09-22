@@ -15,6 +15,7 @@
 
 import { createHash } from "node:crypto";
 import { sql } from "../db/client.ts";
+import { rawConsole } from "../lib/log.ts";
 
 export interface CachedResponse {
   id: string;
@@ -92,7 +93,7 @@ export async function lookupCached(
     SET hit_count = hit_count + 1,
         last_hit_at = now()
     WHERE id = ${row.id}::uuid
-  `.catch((err) => console.warn("[response-cache] hit update failed:", (err as Error).message));
+  `.catch((err) => rawConsole.warn("[response-cache] hit update failed:", (err as Error).message));
   return row;
 }
 
@@ -125,7 +126,7 @@ export async function storeCached(
         SET expires_at = EXCLUDED.expires_at
     `;
   } catch (err) {
-    console.warn("[response-cache] store failed:", (err as Error).message);
+    rawConsole.warn("[response-cache] store failed:", (err as Error).message);
   }
 }
 
@@ -136,7 +137,7 @@ export async function invalidateAll(): Promise<number> {
     await sql`DELETE FROM response_cache`;
     return rows[0]?.count ?? 0;
   } catch (err) {
-    console.warn("[response-cache] invalidate failed:", (err as Error).message);
+    rawConsole.warn("[response-cache] invalidate failed:", (err as Error).message);
     return 0;
   }
 }

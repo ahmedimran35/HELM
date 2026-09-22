@@ -46,6 +46,7 @@ import { generateOneTimePassword } from "../lib/ids.ts";
 import { createSession } from "../auth/session.ts";
 import { serializeSessionCookie, isSecureRequest } from "../middleware/auth.ts";
 import { logAudit } from "../lib/audit.ts";
+import { log, rawConsole } from "../lib/log.ts";
 
 const router = new Hono();
 
@@ -172,6 +173,14 @@ function getProvider(id: ProviderId): ProviderConfig | null {
 }
 
 const SUPPORTED: ProviderId[] = ["google", "github", "microsoft"];
+
+// First-time OAuth signup. The product spec (§7) states there is no public
+// sign-up: accounts are seeded at deploy time or created by an admin. An
+// OAuth callback that silently created a local user for any identity would
+// re-introduce a public registration path. So account *creation* is opt-in
+// (OAUTH_ALLOW_SIGNUP=1). Linking to, or signing in as, an existing account
+// still works regardless of this flag.
+const OAUTH_ALLOW_SIGNUP = process.env.OAUTH_ALLOW_SIGNUP === "1";
 
 function isProviderId(s: string): s is ProviderId {
   return (SUPPORTED as string[]).includes(s);
@@ -385,13 +394,13 @@ router.get("/callback", async (c) => {
     });
     if (!res.ok) {
       const text = await res.text();
-      console.warn(`oauth ${providerParam} token exchange failed: ${res.status} ${text}`);
+      rawConsole.warn(`oauth ${providerParam} token exchange failed: ${res.status} ${text}`);
       c.header("Set-Cookie", clearStateCookie(), { append: true });
       return c.redirect("/settings?oauth=failed", 302);
     }
     tokenJson = (await res.json()) as Record<string, unknown>;
   } catch (err) {
-    console.warn("oauth token exchange error:", (err as Error).message);
+    rawConsole.warn("oauth token exchange error:", (err as Error).message);
     c.header("Set-Cookie", clearStateCookie(), { append: true });
     return c.redirect("/settings?oauth=failed", 302);
   }
@@ -418,13 +427,13 @@ router.get("/callback", async (c) => {
     });
     if (!res.ok) {
       const text = await res.text();
-      console.warn(`oauth ${providerParam} userinfo failed: ${res.status} ${text}`);
+      rawConsole.warn(`oauth ${providerParam} userinfo failed: ${res.status} ${text}`);
       c.header("Set-Cookie", clearStateCookie(), { append: true });
       return c.redirect("/settings?oauth=failed", 302);
     }
     userInfoJson = (await res.json()) as Record<string, unknown>;
   } catch (err) {
-    console.warn("oauth userinfo error:", (err as Error).message);
+    rawConsole.warn("oauth userinfo error:", (err as Error).message);
     c.header("Set-Cookie", clearStateCookie(), { append: true });
     return c.redirect("/settings?oauth=failed", 302);
   }
@@ -478,9 +487,24 @@ router.get("/callback", async (c) => {
     `;
     if (existing[0]) {
       targetUserId = existing[0].user_id;
-    } else {
+    } else if (OAUTH_ALLOW_SIGNUP) {
       targetUserId = await createLocalUserFromOAuth(info, providerParam);
       isNewUser = true;
+    } else {
+      // No linked account and self-service signup is disabled. Refuse
+      // rather than minting an account for an arbitrary external identity.
+      log.warn(
+        `[oauth] rejected signup for ${providerParam} account ${info.accountId}: ` +
+          "no linked account and OAUTH_ALLOW_SIGNUP is not enabled",
+      );
+      await logAudit({
+        userId: null,
+        target: providerParam,
+        action: "oauth_signup_denied",
+        metadata: { account_id: info.accountId, email: info.email },
+      });
+      c.header("Set-Cookie", clearStateCookie(), { append: true });
+      return c.redirect("/login?oauth=signup_disabled", 302);
     }
   }
 

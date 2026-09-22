@@ -25,6 +25,36 @@ declare module "hono" {
 // step-up auth on cookie replay.
 const IP_BIND_ENABLED = process.env.HELM_SESSION_IP_BIND === "1";
 
+/**
+ * Resolve the client IP from headers we are actually allowed to trust.
+ *
+ * `x-forwarded-for` is client-settable unless a reverse proxy rewrites it,
+ * so it is only consulted when `HELM_TRUSTED_PROXY=1`. When we are NOT
+ * behind a trusted proxy we fall back to headers a single trusted proxy
+ * sets itself (`cf-connecting-ip`, `x-real-ip`) and otherwise return null.
+ * Returns null rather than a placeholder so callers skip the comparison
+ * instead of matching everything against "unknown".
+ */
+function trustedClientIp(c: {
+  req: { header(name: string): string | undefined };
+}): string | null {
+  const trustProxy = process.env.HELM_TRUSTED_PROXY === "1";
+  if (trustProxy) {
+    const xff = c.req.header("x-forwarded-for");
+    if (xff) {
+      // Right-most hop is the one our proxy appended.
+      const hops = xff.split(",").map((h) => h.trim()).filter(Boolean);
+      if (hops.length > 0) return hops[hops.length - 1]!;
+    }
+    return null;
+  }
+  const cf = c.req.header("cf-connecting-ip");
+  if (cf && cf.trim()) return cf.trim();
+  const xri = c.req.header("x-real-ip");
+  if (xri && xri.trim()) return xri.trim();
+  return null;
+}
+
 export const requireAuth: MiddlewareHandler = async (c, next) => {
   const cookie = c.req.header("cookie") ?? "";
   const sessionId = parseSessionCookie(cookie);
@@ -40,9 +70,12 @@ export const requireAuth: MiddlewareHandler = async (c, next) => {
   // 0013 migration — treat NULL as "unknown" and set it on this
   // request without flagging a mismatch.
   if (IP_BIND_ENABLED) {
-    const reqIp = (c.req.header("x-forwarded-for")?.split(",")[0]?.trim()
-      ?? c.req.header("x-real-ip")
-      ?? null);
+    // Only trust X-Forwarded-For when we've been told there is a trusted
+    // proxy in front of us (HELM_TRUSTED_PROXY=1). Otherwise XFF is
+    // attacker-controlled and an attacker replaying a stolen cookie could
+    // simply set it to the victim's IP to satisfy the check. Fall back to
+    // the single-proxy headers (cf-connecting-ip / x-real-ip).
+    const reqIp = trustedClientIp(c);
     const lastIp = session.last_seen_ip ?? session.ip ?? null;
     if (reqIp && lastIp && reqIp !== lastIp) {
       // Cookie replay from a different network. Revoke the session,
@@ -73,9 +106,7 @@ export const requireAuth: MiddlewareHandler = async (c, next) => {
 
   // Record this section visit for the §2.7 Sessions tab.
   const section = c.req.path.replace(/^\/api\//, "").split("/")[0] ?? "root";
-  const reqIpForTouch = (c.req.header("x-forwarded-for")?.split(",")[0]?.trim()
-    ?? c.req.header("x-real-ip")
-    ?? null);
+  const reqIpForTouch = trustedClientIp(c);
   await touchSession(sessionId, section, { ip: reqIpForTouch });
 
   return next();

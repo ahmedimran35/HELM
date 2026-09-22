@@ -9,15 +9,16 @@ postgres only.
 
 - Full DB dump via `pg_dump` (custom format, compressed).
 - Schema-only dump, separately, so a future migration can be replayed.
-- WAL archive (point-in-time recovery) — `archive_mode = on`,
-  `archive_command` to an S3 bucket.
+- WAL archive (point-in-time recovery) — **not enabled by default**.
+  The repo ships no `archive_mode` / `archive_command` configuration;
+  enabling it is an operator step (see "WAL archiving" below).
 
-What's NOT backed up:
+What's NOT backed up as separate artifacts:
 
-- Provider API keys in the keychain — those are encrypted at rest
-  INSIDE the postgres dump (the encryption is at the column level,
-  not the row level).
-- File blobs in `file_blobs` — covered by the same dump.
+- Provider API keys in the keychain — they live in the `providers`
+  table as column-encrypted ciphertexts and are therefore included,
+  encrypted, in the same postgres dump.
+- File blobs in `file_blobs` — included in the same dump.
 
 ## Schedule
 
@@ -27,10 +28,25 @@ What's NOT backed up:
 # Full dump every 6 hours. Keep 28 days (4*7) locally; replicate to
 # offsite (S3) with lifecycle policy.
 0 */6 * * * /usr/local/bin/helm-backup.sh full
-# WAL archive continuously (archive_mode + archive_command).
+# WAL archiving is NOT configured by this repo. Enable archive_mode +
+# archive_command in postgresql.conf yourself if you need PITR (see below).
 # Schema-only dump once a day, kept 90 days.
 15 4 * * * /usr/local/bin/helm-backup.sh schema
 ```
+
+### WAL archiving (operator setup, off by default)
+
+Nothing in this repository enables or configures WAL archiving. To get
+point-in-time recovery you must set, in `postgresql.conf`:
+
+```
+wal_level = replica
+archive_mode = on
+archive_command = 'aws s3 cp %p s3://helm-backups/wal/%f'
+```
+
+then restart postgres. Until you do, only the periodic `pg_dump` files
+exist — recovery is to the last dump, not to an arbitrary timestamp.
 
 `/usr/local/bin/helm-backup.sh`:
 

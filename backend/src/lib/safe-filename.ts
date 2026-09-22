@@ -28,6 +28,7 @@
 // `Content-Disposition` header.
 
 const ASCII_FALLBACK_RE = /[^A-Za-z0-9._-]/g;
+// eslint-disable-next-line no-control-regex
 const CONTROL_CHARS_RE = /[\x00-\x1f\x7f]/;
 const PATH_SEP_RE = /[\\/]/;
 

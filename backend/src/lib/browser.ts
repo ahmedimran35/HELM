@@ -23,8 +23,9 @@
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { resolve, sep } from "node:path";
 import { assertSafeOutboundUrl } from "./safe-fetch.ts";
+import { rawConsole } from "../lib/log.ts";
 
 // Cached playwright module + browser. We only ever spin up one
 // chromium instance (the user's "agent browser") and reuse it across
@@ -201,7 +202,6 @@ export async function runBrowser(input: BrowserExecInput): Promise<BrowserExecOu
     };
   }
   return withMutex(async () => {
-    const pw = cachedModule!;
     const context = await cachedBrowser!.newContext({
       userAgent:
         "Mozilla/5.0 (HELM-Agent/1.0) AppleWebKit/537.36 (KHTML, like Gecko) " +
@@ -238,7 +238,7 @@ export async function runBrowser(input: BrowserExecInput): Promise<BrowserExecOu
       // Don't leak raw error.message — the browser stub flows up
       // through the API to the model context. Log full details
       // server-side and store a generic marker.
-      console.warn("[browser] action failed:", (err as Error).message);
+      rawConsole.warn("[browser] action failed:", (err as Error).message);
       return {
         finalUrl,
         title,

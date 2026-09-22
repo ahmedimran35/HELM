@@ -20,6 +20,7 @@
 // accumulate — the score is computed from scratch each time.
 
 import { sql } from "../db/client.ts";
+import { rawConsole } from "../lib/log.ts";
 
 export interface UserPreferences {
   preferred_models: string[];
@@ -220,7 +221,7 @@ export function startPreferenceScheduler(): void {
     void tick();
     schedulerHandle = setInterval(() => void tick(), ONE_DAY_MS);
   }, initialDelay);
-  console.log("✓ preference scheduler armed (next run in",
+  rawConsole.log("✓ preference scheduler armed (next run in",
     Math.round(initialDelay / 60_000), "min)");
 }
 
@@ -240,13 +241,13 @@ async function tick(): Promise<void> {
     `;
     for (const row of targets) {
       await recomputeProfileForUser(row.user_id).catch((err) =>
-        console.warn("[preference] recompute failed for", row.user_id, (err as Error).message),
+        rawConsole.warn("[preference] recompute failed for", row.user_id, (err as Error).message),
       );
     }
     if (targets.length > 0) {
-      console.log("✓ preference learner: recomputed", targets.length, "profiles");
+      rawConsole.log("✓ preference learner: recomputed", targets.length, "profiles");
     }
   } catch (err) {
-    console.warn("[preference] tick failed:", (err as Error).message);
+    rawConsole.warn("[preference] tick failed:", (err as Error).message);
   }
 }

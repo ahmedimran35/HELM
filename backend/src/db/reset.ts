@@ -4,6 +4,7 @@
 
 import { sql } from "./client.ts";
 import { runMigrations } from "./migrate.ts";
+import { rawConsole } from "../lib/log.ts";
 
 function isSafeToReset(): boolean {
   const url = process.env.DATABASE_URL ?? "";
@@ -16,12 +17,12 @@ function isSafeToReset(): boolean {
 }
 
 if (!isSafeToReset()) {
-  console.error("✗ refusing to reset — DATABASE_URL doesn't look like a dev host");
+  rawConsole.error("✗ refusing to reset — DATABASE_URL doesn't look like a dev host");
   process.exit(1);
 }
 
 if (import.meta.main) {
-  console.log("⚠  dropping all tables in helm DB…");
+  rawConsole.log("⚠  dropping all tables in helm DB…");
   // Drop in reverse-dependency order via CASCADE.
   await sql.unsafe(`
     DROP TABLE IF EXISTS
@@ -32,9 +33,9 @@ if (import.meta.main) {
       schema_migrations
     CASCADE;
   `);
-  console.log("✓ dropped; re-running migrations");
+  rawConsole.log("✓ dropped; re-running migrations");
   const result = await runMigrations();
-  console.log(`✓ applied ${result.applied.length} migration(s)`);
+  rawConsole.log(`✓ applied ${result.applied.length} migration(s)`);
   await sql.end();
   process.exit(0);
 }

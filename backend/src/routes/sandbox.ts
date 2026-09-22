@@ -4,8 +4,15 @@
 //   <repo>/tmp/sandbox/{user_id}/
 // that persists across exec calls inside the same session. We never
 // execute outside that directory tree (cwd is always pinned to it), and
-// every spawned command is wrapped in `bash -lc` so PATH resolution and
-// shell semantics are predictable.
+// every spawned command is wrapped in `bash -c` (non-login, so host
+// profile scripts can't be used for persistence) for predictable
+// shell semantics.
+//
+// Shell exec is DISABLED BY DEFAULT. The default `bash -c` path is not
+// a jail — see the isolation matrix below — so the exec endpoint refuses
+// every caller until the operator opts into one of:
+//   * SANDBOX_USE_UNSHARE=1       (Linux) real user/net/pid namespaces
+//   * SANDBOX_ALLOW_UNSAFE_EXEC=1 (single-user dev only) plain bash
 //
 // Safety notes (intentionally conservative for v1):
 //   * Hard timeout enforced via `AbortSignal.timeout` — default 30s, max
@@ -80,8 +87,10 @@ import { mkdir, rm, stat, readdir, writeFile, readFile, lstat } from "node:fs/pr
 import { existsSync } from "node:fs";
 import { sql } from "../db/client.ts";
 import { requireAuth } from "../middleware/auth.ts";
+import { rateLimit } from "../middleware/ratelimit.ts";
 import { logAudit } from "../lib/audit.ts";
 import { validate, validationErrorResponse } from "../lib/validate.ts";
+import { rawConsole } from "../lib/log.ts";
 
 const router = new Hono();
 router.use("*", requireAuth);
@@ -98,17 +107,26 @@ const USE_UNSHARE = process.env.SANDBOX_USE_UNSHARE === "1";
 // deployment — the basic path can read host files and other users'
 // sandbox dirs.
 const ALLOW_UNSAFE_EXEC = process.env.SANDBOX_ALLOW_UNSAFE_EXEC === "1";
-const ISOLATION_MODE: "basic" | "unshare" = USE_UNSHARE ? "unshare" : "basic";
+// Verify the `unshare` binary actually exists before claiming namespace
+// isolation. Without this probe, SANDBOX_USE_UNSHARE=1 on a host that
+// lacks unshare(1) (macOS, minimal containers) would advertise
+// `isolation: "unshare"` on every exec response while the spawn failed
+// with ENOENT — and a PATH-shadowed no-op shim would run the command
+// unjailed while still claiming isolation. Fail closed instead.
+const UNSHARE_BIN = USE_UNSHARE ? Bun.which("unshare") : null;
+const UNSHARE_READY = USE_UNSHARE && UNSHARE_BIN !== null;
+const ISOLATION_MODE: "basic" | "unshare" = UNSHARE_READY ? "unshare" : "basic";
 // One-time boot-time log so operators can confirm which isolation path
 // is active without poking at every exec response.
 {
-  // eslint-disable-next-line no-console
-  console.log(
-    USE_UNSHARE
+  rawConsole.log(
+    UNSHARE_READY
       ? "[sandbox] isolation mode: unshare + net-ns"
-      : ALLOW_UNSAFE_EXEC
-        ? "[sandbox] WARNING: UNSAFE exec enabled (SANDBOX_ALLOW_UNSAFE_EXEC=1) — no namespace isolation"
-        : "[sandbox] exec disabled (set SANDBOX_USE_UNSHARE=1 for namespace isolation)",
+      : USE_UNSHARE
+        ? "[sandbox] ERROR: SANDBOX_USE_UNSHARE=1 but `unshare` is not on PATH — exec stays disabled (Linux-only feature)"
+        : ALLOW_UNSAFE_EXEC
+          ? "[sandbox] WARNING: UNSAFE exec enabled (SANDBOX_ALLOW_UNSAFE_EXEC=1) — no namespace isolation"
+          : "[sandbox] exec disabled (set SANDBOX_USE_UNSHARE=1 for namespace isolation)",
   );
 }
 
@@ -327,7 +345,14 @@ router.post("/sessions/:id/end", async (c) => {
 // ============================================================================
 // Exec
 // ============================================================================
-router.post("/sessions/:id/exec", async (c) => {
+// Sandbox exec is the second most abusable endpoint — bound each user to
+// ~60 commands / minute. Registered after requireAuth (the router-wide
+// `use("*", requireAuth)` above) so the user id is populated; a
+// user-scoped limiter that ran before auth would silently no-op.
+router.post(
+  "/sessions/:id/exec",
+  rateLimit({ limit: 60, windowMs: 60_000, scope: "user" }),
+  async (c) => {
   const user = c.get("user");
   const id = c.req.param("id");
   // Isolation gate: the default `bash -c` path is NOT a jail — there is
@@ -338,11 +363,13 @@ router.post("/sessions/:id/exec", async (c) => {
   // `unshare` namespace isolation is enabled, or the operator has
   // explicitly opted into the unsafe path via SANDBOX_ALLOW_UNSAFE_EXEC=1
   // (single-user dev boxes only).
-  if (!USE_UNSHARE && !ALLOW_UNSAFE_EXEC) {
+  if (!UNSHARE_READY && !ALLOW_UNSAFE_EXEC) {
     return c.json(
       {
         error: "sandbox_isolation_required",
-        hint: "enable SANDBOX_USE_UNSHARE=1 (Linux) or, on single-user dev hosts only, SANDBOX_ALLOW_UNSAFE_EXEC=1",
+        hint: USE_UNSHARE
+          ? "SANDBOX_USE_UNSHARE=1 is set but the `unshare` binary was not found — namespace isolation is Linux-only (util-linux). Exec stays disabled; on a single-user dev host use SANDBOX_ALLOW_UNSAFE_EXEC=1 instead."
+          : "enable SANDBOX_USE_UNSHARE=1 (Linux) or, on single-user dev hosts only, SANDBOX_ALLOW_UNSAFE_EXEC=1",
       },
       403,
     );
@@ -389,9 +416,9 @@ router.post("/sessions/:id/exec", async (c) => {
   //   --fork bash -c <cmd>` — gives the child its own user, network,
   //   and pid namespaces. The netns means no external connectivity by
   //   default; only loopback is reachable inside the new namespace.
-  const execCmd = USE_UNSHARE
+  const execCmd = UNSHARE_READY
     ? [
-        "unshare",
+        UNSHARE_BIN,
         "--user",
         "--map-root-user",
         "--net",
@@ -461,6 +488,7 @@ router.post("/sessions/:id/exec", async (c) => {
     const chunks: Uint8Array[] = [];
     let total = 0;
     let truncated = false;
+    // eslint-disable-next-line no-constant-condition
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;

@@ -16,6 +16,7 @@ import { Hono } from "hono";
 import { sql } from "../db/client.ts";
 import { requireAuth } from "../middleware/auth.ts";
 import { logAudit } from "../lib/audit.ts";
+import { rawConsole } from "../lib/log.ts";
 
 const router = new Hono();
 router.use("*", requireAuth);
@@ -237,7 +238,7 @@ async function transcribe(input: {
   } catch (err) {
     // Don't leak the underlying error message into the transcript — that
     // field is returned to the client and persisted in the DB.
-    console.warn("[voice] whisper failed:", (err as Error).message);
+    rawConsole.warn("[voice] whisper failed:", (err as Error).message);
     return {
       text: "[whisper failed: transcription error]",
       stub: true,

@@ -127,5 +127,7 @@ dig +short google.com
 curl -m 5 -o /dev/null -w '%{http_code}\n' https://api.openai.com/v1/models
 ```
 
-See `scripts/backup-restore-test.sh` for the DB-level restore drill
-that exercises the full egress path end-to-end.
+See `scripts/backup-restore-test.sh` for the DB-level restore drill.
+Note: that script is a local `pg_dump` → fresh-container → row-count
+diff; it does **not** exercise the egress path. Verify egress with the
+`curl` commands above from inside the api container.

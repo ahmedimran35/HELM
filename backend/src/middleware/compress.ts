@@ -22,8 +22,6 @@ import type { MiddlewareHandler } from "hono";
 import { compress } from "hono/compress";
 import { etag } from "hono/etag";
 
-const COMPRESSIBLE_TYPES = /^(text\/(html|css|plain|xml|javascript|markdown)|application\/(json|javascript|xml|ld\+json|manifest\+json|x-yaml|yaml)|image\/svg\+xml)/;
-
 /** ETag middleware — only sets the header for cacheable responses. */
 export const cachingEtag: MiddlewareHandler = etag({
   // Only cache static-looking responses. Streaming SSE and authenticated

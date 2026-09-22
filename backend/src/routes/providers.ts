@@ -18,7 +18,6 @@ import { encryptSecret, maskSecret, decryptSecret } from "../providers/crypto.ts
 import {
   assertSafeBaseUrl,
   buildAdapter,
-  listProviders,
   getProviderById,
 } from "../providers/registry.ts";
 import { logAudit } from "../lib/audit.ts";

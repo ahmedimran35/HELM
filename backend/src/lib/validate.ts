@@ -27,7 +27,7 @@ function validateOne(value: unknown, rule: FieldRule, key: string): unknown {
       if (typeof value !== "string") {
         throw new ValidationError(key, "must be a string");
       }
-      let s = rule.trim ? value.trim() : value;
+      const s = rule.trim ? value.trim() : value;
       if (rule.minLength !== undefined && s.length < rule.minLength) {
         throw new ValidationError(key, `must be at least ${rule.minLength} chars`);
       }

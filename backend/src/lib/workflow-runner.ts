@@ -34,6 +34,7 @@ import { logAudit } from "./audit.ts";
 import { getHarnessByKind } from "../harness/router.ts";
 import { assertSafeOutboundUrl, safeFetch } from "./safe-fetch.ts";
 import type { Predicate } from "./watches.ts";
+import { rawConsole } from "../lib/log.ts";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -158,7 +159,7 @@ export async function execute(
   // the request path so the HTTP response returns as soon as the run
   // row is committed.
   void executeBody(workflow, runId, opts).catch((err) => {
-    console.warn("workflow execution failed:", (err as Error).message);
+    rawConsole.warn("workflow execution failed:", (err as Error).message);
   });
   return { run_id: runId, status: "running" };
 }
@@ -216,7 +217,7 @@ async function executeBody(
     // Don't leak raw error.message into the run's error column — it's
     // returned to the workflow owner via the run summary. Log full
     // details server-side and store a generic marker.
-    console.warn("[workflow-runner] executeBody failed:", (err as Error).message);
+    rawConsole.warn("[workflow-runner] executeBody failed:", (err as Error).message);
     errorMessage = "workflow_failed";
   } finally {
     await finishRun(runId, ctx, status, errorMessage);
@@ -289,7 +290,7 @@ async function walk(nodeId: string, ctx: ExecutionContext): Promise<void> {
     // Don't leak raw error.message into the per-node log — that log
     // is returned to the workflow owner via the run summary. Log
     // full details server-side and store a generic marker.
-    console.warn("[workflow-runner] node failed:", (e as Error).message);
+    rawConsole.warn("[workflow-runner] node failed:", (e as Error).message);
     err = "node_failed";
   }
   const finishedAt = new Date().toISOString();
@@ -525,18 +526,25 @@ async function condition(node: WorkflowNode, ctx: ExecutionContext): Promise<unk
   const op = (typeof cfg.op === "string" ? cfg.op : "eq") as Predicate["op"];
   const expected = cfg.value;
   if (!path) throw new Error("condition requires config.path");
-  // Resolve `path` against the union of upstream outputs. The path may
-  // be either a dot-walk into the condition node's own previous output
-  // (most common) — we just look at the condition node's own private
-  // state. The user wires it explicitly via the prompt.
-  const lhs = getByPath(ctx.outputs, path);
-  const ok = matchPredicate([{ op, path, value: expected }], {
-    node: lhs === undefined ? {} : (typeof lhs === "object" && lhs !== null ? lhs as Record<string, unknown> : { value: lhs }),
-  });
+  // Resolve `path` against the upstream source node's output, not the
+  // full outputs map. The path is relative to whatever node feeds into
+  // this condition (i.e. `agent_run` output for a typical triage).
+  // Edge predicates use the same `node.<field>` prefix convention so
+  // the condition node and its outgoing edges share the same mental
+  // model for what `path` means.
+  const sourceId = findIncomingSource(ctx.workflow.graph.edges, node.id);
+  const sourceOutput = sourceId ? ctx.outputs[sourceId] : undefined;
+  const payload: { node: Record<string, unknown> } = sourceOutput === undefined
+    ? { node: {} }
+    : (typeof sourceOutput === "object" && sourceOutput !== null
+        ? { node: sourceOutput as Record<string, unknown> }
+        : { node: { value: sourceOutput } });
+  const lhs = getByPath(payload.node, path);
+  const ok = matchPredicate([{ op, path, value: expected }], payload);
   return { ok, path, op, expected, value: lhs };
 }
 
-async function delay(node: WorkflowNode, ctx: ExecutionContext): Promise<unknown> {
+async function delay(node: WorkflowNode, _ctx: ExecutionContext): Promise<unknown> {
   const cfg = node.config ?? {};
   const seconds = clampNumber(cfg.seconds, 0, 3600, 5);
   await new Promise<void>((resolve) => setTimeout(resolve, seconds * 1000));
@@ -609,7 +617,7 @@ function supportTriage(): WorkflowTemplate {
           prompt: "Look at recent unread messages. Decide if any are urgent. Return JSON like {\"urgent\": true|false, \"summary\": \"...\"}.",
         } },
         { id: "c1", kind: "condition", label: "Urgent?", x: 580, y: 80, config: {
-          path: "node.urgent", op: "eq", value: true,
+          path: "text", op: "contains", value: "urgent",
         } },
         { id: "h1", kind: "http_post", label: "Slack alert", x: 840, y: 40, config: {
           url: "https://hooks.slack.com/services/REPLACE/ME/ME",
@@ -699,7 +707,7 @@ function costWatchdog(): WorkflowTemplate {
           prompt: "Analyse recent AI spend. Return JSON like {\"over\": true|false, \"summary\": \"...\"}.",
         } },
         { id: "c1", kind: "condition", label: "Over threshold?", x: 580, y: 80, config: {
-          path: "node.over", op: "eq", value: true,
+          path: "text", op: "contains", value: "\"over\": true",
         } },
         { id: "h1", kind: "http_post", label: "Slack alert", x: 840, y: 40, config: {
           url: "https://hooks.slack.com/services/REPLACE/ME/ME",
@@ -849,6 +857,13 @@ function eq(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (typeof a === "number" && typeof b === "number") return a === b;
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function findIncomingSource(edges: WorkflowEdge[], targetNodeId: string): string | null {
+  const incoming = edges.filter((e) => e.target === targetNodeId);
+  // In a valid DAG each condition node has exactly one incoming edge,
+  // but we pick the first for robustness.
+  return incoming[0]?.source ?? null;
 }
 
 function getByPath(obj: Record<string, unknown>, path: string): unknown {

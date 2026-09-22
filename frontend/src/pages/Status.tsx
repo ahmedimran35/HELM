@@ -15,13 +15,10 @@ import {
   RefreshIcon,
   PlayIcon,
   AlertTriangleIcon,
-  CheckIcon,
-  InfoIcon,
   ActivityIcon,
   ZapIcon,
 } from "../components/ui/Icon";
 import { useToast } from "../components/ui/feedback/Toast";
-import { cn } from "../lib/cn";
 
 interface ServiceStatus {
   state: "healthy" | "degraded" | "down";

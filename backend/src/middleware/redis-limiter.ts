@@ -20,11 +20,6 @@ interface RedisLike {
   eval(script: string, keys: string[], args: (string | number)[]): Promise<unknown>;
 }
 
-interface Bucket {
-  count: number;
-  resetAt: number;
-}
-
 let redis: RedisLike | null = null;
 let connectAttempted = false;
 

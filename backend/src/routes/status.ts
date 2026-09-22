@@ -24,6 +24,7 @@ import { sql } from "../db/client.ts";
 import { requireAuth } from "../middleware/auth.ts";
 import { requireAdmin } from "../middleware/role.ts";
 import { safeError } from "../lib/safe-error.ts";
+import { rawConsole } from "../lib/log.ts";
 
 const router = new Hono();
 router.use("*", requireAuth);
@@ -80,7 +81,7 @@ async function probeDb(): Promise<ServiceStatus> {
       latency_ms: Date.now() - start,
     };
   } catch (err) {
-    console.warn("[status] db probe failed:", (err as Error).message);
+    rawConsole.warn("[status] db probe failed:", (err as Error).message);
     return { state: "down", detail: "db_unreachable", latency_ms: Date.now() - start };
   }
 }
@@ -119,7 +120,7 @@ async function probeRedis(): Promise<ServiceStatus> {
     });
     return { state: "healthy", detail: `tcp ${host}:${port}`, latency_ms: Date.now() - start };
   } catch (err) {
-    console.warn("[status] redis probe failed:", (err as Error).message);
+    rawConsole.warn("[status] redis probe failed:", (err as Error).message);
     return { state: "down", detail: "redis_unreachable", latency_ms: Date.now() - start };
   }
 }
@@ -137,7 +138,7 @@ async function probeProviders(): Promise<ProviderStatus> {
       ? { state: "healthy", count, model_count }
       : { state: "degraded", count, model_count, detail: "no providers configured" };
   } catch (err) {
-    console.warn("[status] providers probe failed:", (err as Error).message);
+    rawConsole.warn("[status] providers probe failed:", (err as Error).message);
     return { state: "down", detail: "providers_unavailable", count: 0, model_count: 0 };
   }
 }
@@ -160,7 +161,7 @@ async function probeHarnesses(): Promise<HarnessStatus[]> {
       detail: r.model_count > 0 ? `${r.model_count} models` : "0 models",
     }));
   } catch (err) {
-    console.warn("[status] harnesses probe failed:", (err as Error).message);
+    rawConsole.warn("[status] harnesses probe failed:", (err as Error).message);
     return [{ kind: "unknown", state: "down", model_count: 0, detail: "harnesses_unavailable" }];
   }
 }
@@ -186,7 +187,7 @@ async function probeJobs(): Promise<JobStatus[]> {
       last_run_at: r?.last?.toISOString() ?? undefined,
     });
   } catch (err) {
-    console.warn("[status] watch_scheduler probe failed:", (err as Error).message);
+    rawConsole.warn("[status] watch_scheduler probe failed:", (err as Error).message);
     jobs.push({ name: "watch_scheduler", state: "down", detail: "watch_scheduler_unavailable" });
   }
   // Memory scheduler — measured by activity in memory_entries
@@ -206,7 +207,7 @@ async function probeJobs(): Promise<JobStatus[]> {
       last_run_at: r?.last?.toISOString() ?? undefined,
     });
   } catch (err) {
-    console.warn("[status] memory_scheduler probe failed:", (err as Error).message);
+    rawConsole.warn("[status] memory_scheduler probe failed:", (err as Error).message);
     jobs.push({ name: "memory_scheduler", state: "down", detail: "memory_scheduler_unavailable" });
   }
   // Summarizer — same memory_entries table; status distinguishes by
@@ -225,7 +226,7 @@ async function probeJobs(): Promise<JobStatus[]> {
       last_run_at: last?.toISOString() ?? undefined,
     });
   } catch (err) {
-    console.warn("[status] summarizer probe failed:", (err as Error).message);
+    rawConsole.warn("[status] summarizer probe failed:", (err as Error).message);
     jobs.push({ name: "summarizer", state: "down", detail: "summarizer_unavailable" });
   }
   return jobs;

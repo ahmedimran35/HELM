@@ -48,8 +48,6 @@ import {
   LogOutIcon,
   UserIcon,
   ModelIcon,
-  CheckIcon,
-  InfoIcon,
 } from "../ui/Icon";
 import { Avatar } from "../ui/Avatar";
 import { cn } from "../../lib/cn";
@@ -205,7 +203,7 @@ function CommandPalette({
   onClose: () => void;
 }) {
   const { user, logout } = useAuth();
-  const { theme, toggleTheme } = useTheme();
+  const { toggleTheme } = useTheme();
   const navigate = useNavigate();
   const [q, setQ] = useState("");
   const [results, setResults] = useState<Result[]>([]);
@@ -245,6 +243,7 @@ function CommandPalette({
         setResults(data.results ?? []);
         setActive(0);
       } catch (err) {
+        // eslint-disable-next-line no-console
         console.warn("search failed:", err);
         setResults([]);
       } finally {
@@ -448,8 +447,10 @@ function CommandPalette({
 }
 
 function ActionIcon({ id, className }: { id: string; className?: string }) {
+  // useTheme must run unconditionally — calling it inside the branch
+  // below made the hook order depend on `id`.
+  const { theme } = useTheme();
   if (id === "action:toggle-theme") {
-    const { theme } = useTheme();
     return theme === "dark" ? (
       <SunIcon size={14} className={cn("text-textMuted", className)} />
     ) : (

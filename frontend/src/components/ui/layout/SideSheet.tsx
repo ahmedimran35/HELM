@@ -24,7 +24,7 @@
 // - Honors prefers-reduced-motion: snaps in instantly if the user opted
 //   out of animations
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "../../../lib/cn";
 import { XIcon } from "../Icon";

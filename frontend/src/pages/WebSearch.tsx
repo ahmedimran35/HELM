@@ -67,7 +67,6 @@ export function WebSearchPage() {
   const configured = status && status.providers.length > 0;
   const remaining = status ? status.quota.daily_limit - status.quota.used_today : 0;
 
-  const lastResult = response;
   return (
     <div className="p-6 max-w-[900px] space-y-4">
       <div className="flex items-baseline gap-3">

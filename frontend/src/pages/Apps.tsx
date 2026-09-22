@@ -24,7 +24,7 @@
 //                                      user: only self)
 //   DELETE /api/app-installs/:id     — uninstall (admin or owner)
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { apiGet, apiPost, apiPatch, apiDelete } from "../api/client";
 import { Badge } from "../components/ui/Badge";
@@ -120,7 +120,7 @@ export function AppsPage() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
 
-  const reload = () => {
+  const reload = useCallback(() => {
     setApps(null);
     apiGet<AppRow[]>("/apps")
       .then(setApps)
@@ -134,11 +134,11 @@ export function AppsPage() {
           tone: "warning",
         });
       });
-  };
+  }, [addToast]);
 
   useEffect(() => {
     reload();
-  }, []);
+  }, [reload]);
 
   const filtered = useMemo(() => {
     if (!apps) return [];
@@ -1009,17 +1009,17 @@ function AppInstallsPanel({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const reload = () => {
+  const reload = useCallback(() => {
     apiGet<AppInstall[]>(`/apps/${app.slug}/installs`)
       .then(setInstalls)
       .catch(() => setInstalls([]));
-  };
+  }, [app.slug]);
 
   useEffect(() => {
     reload();
     apiGet<PanelSummary[]>("/panels").then(setPanels).catch(() => {});
     apiGet<UserSummary[]>("/users").then(setUsers).catch(() => {});
-  }, [app.slug]);
+  }, [reload]);
 
   async function install() {
     if (!target) {

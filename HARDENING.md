@@ -1,21 +1,23 @@
 # HARDENING.md
 
 This document is the **deployment-side** companion to the in-code
-security work. Two sectors — **S11 Sandbox** and **S15 Network/Egress**
-— cannot be hardened from inside the application code alone. They
+security work. Two sectors — **Sandbox** and **Network/Egress** —
+cannot be hardened from inside the application code alone. They
 require the operator to apply the configuration in this file.
 
-If every section in this document is followed, both sectors reach
-**10/10**. Skip any section and the score drops by exactly the
-magnitude noted.
+Each section describes the residual gap it closes. None of it is a
+substitute for an independent security audit.
 
 ---
 
-## 1. Container-level hardening (S11 Sandbox — bring to 10/10)
+## 1. Container-level hardening (Sandbox)
 
-The sandbox runs `bash -c` with a restricted env. From the code, we
-already strip `SESSION_SECRET`, run as the dedicated `helm` user, and
-reject symlinks. What's still missing is **OS-level isolation** that
+Shell exec is **disabled by default** (`403 sandbox_isolation_required`).
+The `bash -c` path is not a jail; enabling it requires
+`SANDBOX_USE_UNSHARE=1` (Linux) or the dev-only
+`SANDBOX_ALLOW_UNSAFE_EXEC=1`. From the code we already strip
+`SESSION_SECRET`, run as the dedicated `helm` user, and reject symlinks
+on the file API. What's still missing is **OS-level isolation** that
 only the container runtime can provide.
 
 ### 1.1 Required runtime flags
@@ -119,7 +121,7 @@ profile is a defense-in-depth step for SOC2 environments.
 
 ---
 
-## 2. Host-level egress firewall (S15 Network — bring to 10/10)
+## 2. Host-level egress firewall (Network)
 
 Application-layer SSRF guard (`safeFetch` + `assertSafeOutboundUrl`) is
 necessary but not sufficient. A compromised process can call any IP
@@ -414,26 +416,29 @@ Before going live, every box must be checked:
 - [ ] Real-time alerting is configured for `account_locked` events
 - [ ] Audit logs are forwarded to an append-only store
 
-If any box is unchecked, the corresponding sector's score is below 10/10.
+If any box is unchecked, the corresponding control is not in place.
 
 ---
 
-## 8. Score impact table
+## 8. Deployment checklist → controls
 
-| Section | If applied | If skipped |
+This table maps each section to the control it establishes and the
+residual gap if it is skipped. It states effects, not scores.
+
+| Section | Control established | Residual gap if skipped |
 |---|---|---|
-| §1 Container hardening | S11 = 10/10 | S11 = 5/10 |
-| §2 Egress firewall | S15 = 10/10 | S15 = 4/10 |
-| §3 Network segmentation | S15 = 10/10 | S15 = 6/10 |
-| §4 Audit immutability | S19 = 9/10 | S19 = 7/10 |
-| §5 SIEM | S20 = 9/10 | S20 = 5/10 |
-| §6.1 Base image digests | supply-chain = 10/10 | supply-chain = 6/10 |
-| §6.2 Postgres TLS | S15 = 10/10 | S15 = 8/10 |
-| §6.3 Redis requirepass | S15 = 9/10 | S15 = 7/10 |
-| §6.4 Secret scanning | supply-chain = 10/10 | supply-chain = 5/10 |
-| §6.5 SPA CSP | XSS = 10/10 | XSS = 7/10 |
-| §7 All deployment boxes | all sectors +0.5–1.0 | (varies) |
+| §1 Container hardening | Read-only rootfs, dropped capabilities, no-new-privileges | Container escape or in-container RCE reaches the host |
+| §2 Egress firewall | Default-deny egress with an explicit allow-list | Compromised API can reach arbitrary internet hosts |
+| §3 Network segmentation | API/db/redis isolated per network | Lateral movement between services |
+| §4 Audit immutability | Append-only audit sink | An attacker with DB access can erase their traces |
+| §5 SIEM | Alerting + retention on security events | Breaches are detected late or not at all |
+| §6.1 Base image digests | Reproducible, pinned images | Silent upstream image swap |
+| §6.2 Postgres TLS | Encrypted db transport | Credential/query sniffing on the wire |
+| §6.3 Redis requirepass | Authenticated Redis | Unauthenticated cache/queue access |
+| §6.4 Secret scanning | Leak detection in CI | Committed secrets go unnoticed |
+| §6.5 SPA CSP | Browser-enforced XSS containment | XSS has a larger blast radius |
+| §7 Deployment checkboxes | Operator verification of the above | Controls are assumed rather than confirmed |
 
-Applying **§1, §2, §3, §5, §6, §7** brings the deployment-side average
-from the 5–7/10 range into the 9–10/10 range. The code-side work in
-S1–S10, S12–S14, S16–S19 already gives 9–10/10 across the board.
+These are code-external controls. Whether they are sufficient, and what
+the overall security posture actually is, requires an independent audit —
+this document is a deployment recipe, not an assessment.

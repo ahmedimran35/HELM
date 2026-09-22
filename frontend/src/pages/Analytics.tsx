@@ -53,13 +53,17 @@ interface Alert {
 
 export function AnalyticsPage() {
   const { user } = useAuth();
-  if (user?.role !== "admin") return <NoAccess title="Analytics" />;
+  const isAdmin = user?.role === "admin";
+  // Hooks must run unconditionally: the role guard now happens after
+  // them, and the effect itself short-circuits for non-admins so we
+  // don't fire admin-only API calls for users without access.
   const [spend, setSpend] = useState<SpendByModel[] | null>(null);
   const [timeline, setTimeline] = useState<MessageBucket[] | null>(null);
   const [top, setTop] = useState<TopUser[] | null>(null);
   const [alerts, setAlerts] = useState<Alert[] | null>(null);
 
   useEffect(() => {
+    if (!isAdmin) return;
     apiGet<SpendByModel[]>("/governance/analytics/spend-by-model")
       .then(setSpend)
       .catch(() => setSpend([]));
@@ -72,7 +76,9 @@ export function AnalyticsPage() {
     apiGet<Alert[]>("/governance/analytics/alerts")
       .then(setAlerts)
       .catch(() => setAlerts([]));
-  }, []);
+  }, [isAdmin]);
+
+  if (!isAdmin) return <NoAccess title="Analytics" />;
 
   const spendData: BarDatum[] = (spend ?? []).map((s) => ({
     label: s.model_name ?? s.model_id?.slice(0, 8) ?? "unknown",

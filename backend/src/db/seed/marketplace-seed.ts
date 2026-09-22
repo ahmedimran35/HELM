@@ -10,6 +10,7 @@
 //   persona             — a system-prompt preset the user can adopt
 
 import { sql } from "../client.ts";
+import { rawConsole } from "../../lib/log.ts";
 
 interface SeedEntry {
   kind: "skill_pack" | "app" | "workflow_template" | "persona";
@@ -274,11 +275,11 @@ export async function seedMarketplaceIfEmpty(): Promise<MarketplaceSeedResult> {
   });
 
   if (result.seeded) {
-    console.log(
+    rawConsole.log(
       `✓ marketplace seed: inserted ${result.inserted} entries (kind mix = ${ENTRIES.map((e) => e.kind).join(", ")})`,
     );
   } else {
-    console.log("✓ marketplace seed: catalogue non-empty, skipping seed");
+    rawConsole.log("✓ marketplace seed: catalogue non-empty, skipping seed");
   }
   return result;
 }

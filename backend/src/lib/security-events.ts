@@ -28,6 +28,7 @@
 // the exact moment we need it.
 
 import { fireAlert } from "./alerts.ts";
+import { rawConsole } from "../lib/log.ts";
 
 export type SecurityEventType =
   | "csp_violation"
@@ -65,10 +66,10 @@ export function logSecurityEvent(e: SecurityEvent): void {
     };
     // toString() inside console.log is what most log shippers grep on;
     // using JSON.stringify directly keeps the format stable.
-    console.log(JSON.stringify(payload));
+    rawConsole.log(JSON.stringify(payload));
   } catch (err) {
     // Last-ditch — never throw from the logger.
-    console.warn("[security-events] log write failed:", (err as Error).message);
+    rawConsole.warn("[security-events] log write failed:", (err as Error).message);
   }
   // 2. Fire-and-forget Slack alert for warn/critical.
   if (e.severity !== "info") {
@@ -84,7 +85,7 @@ export function logSecurityEvent(e: SecurityEvent): void {
         ],
       });
     } catch (err) {
-      console.warn("[security-events] alert fire failed:", (err as Error).message);
+      rawConsole.warn("[security-events] alert fire failed:", (err as Error).message);
     }
   }
 }

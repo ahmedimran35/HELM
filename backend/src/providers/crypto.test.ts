@@ -11,7 +11,6 @@
 import { describe, test, expect, beforeAll } from "bun:test";
 import {
   createCipheriv,
-  createDecipheriv,
   randomBytes,
   scryptSync,
 } from "node:crypto";

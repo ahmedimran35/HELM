@@ -24,6 +24,7 @@ import { sql } from "../../db/client.ts";
 import { logAudit } from "../audit.ts";
 import type { HarnessKind } from "../../harness/types.ts";
 import { storeCached as chatStoreCached } from "./cache.ts";
+import { rawConsole } from "../../lib/log.ts";
 
 /** Persist the assembled assistant reply and return its id. */
 export async function persistAssistantMessage(args: {
@@ -188,7 +189,7 @@ export async function runPostTurnBookkeeping(
     INSERT INTO harness_runs (user_id, harness, model, prompt_tokens, completion_tokens, latency_ms, status)
     VALUES (${userId}::uuid, ${harnessKind}, ${externalId},
             ${promptTokens ?? 0}, ${completionTokens}, ${latencyMs}, 'ok')
-  `.catch((err) => console.warn("[chat] harness_runs insert failed:", (err as Error).message));
+  `.catch((err) => rawConsole.warn("[chat] harness_runs insert failed:", (err as Error).message));
   await logAudit({
     userId,
     target: modelId,
@@ -238,10 +239,10 @@ export async function runPostTurnBookkeeping(
     try {
       const { runSelfTest } = await import("../self-test.ts");
       void runSelfTest(assistantMessageId).catch((err) =>
-        console.warn("[chat] self-test failed:", (err as Error).message),
+        rawConsole.warn("[chat] self-test failed:", (err as Error).message),
       );
     } catch (err) {
-      console.warn("[chat] self-test dispatch failed:", (err as Error).message);
+      rawConsole.warn("[chat] self-test dispatch failed:", (err as Error).message);
     }
   }
 }
@@ -260,5 +261,5 @@ export async function recordFailedTurn(inputs: {
     INSERT INTO harness_runs (user_id, harness, model, prompt_tokens, completion_tokens, latency_ms, status, error)
     VALUES (${inputs.userId}::uuid, ${inputs.harnessKind}, ${inputs.externalId},
             0, 0, ${inputs.latencyMs}, 'error', ${inputs.errorMessage})
-  `.catch((err) => console.warn("[chat] harness_runs error insert failed:", (err as Error).message));
+  `.catch((err) => rawConsole.warn("[chat] harness_runs error insert failed:", (err as Error).message));
 }

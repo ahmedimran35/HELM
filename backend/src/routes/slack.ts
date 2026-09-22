@@ -32,6 +32,7 @@ import { requireAuth } from "../middleware/auth.ts";
 import { requireAdmin } from "../middleware/role.ts";
 import { encryptSecret } from "../lib/crypto.ts";
 import { logAudit } from "../lib/audit.ts";
+import { rawConsole } from "../lib/log.ts";
 
 const router = new Hono();
 
@@ -98,12 +99,12 @@ authenticatedRouter.post("/install/callback", requireAdmin, async (c) => {
     });
     json = (await res.json()) as Record<string, unknown>;
   } catch (err) {
-    console.warn("slack oauth exchange failed:", (err as Error).message);
+    rawConsole.warn("slack oauth exchange failed:", (err as Error).message);
     return c.redirect("/connected-accounts?slack=failed", 302);
   }
 
   if (json.ok !== true || typeof json.bot_token !== "string") {
-    console.warn("slack oauth rejected:", JSON.stringify(json).slice(0, 240));
+    rawConsole.warn("slack oauth rejected:", JSON.stringify(json).slice(0, 240));
     return c.redirect("/connected-accounts?slack=denied", 302);
   }
 
@@ -250,7 +251,7 @@ router.post("/events", async (c) => {
   try {
     handled = await dispatchSlackEvent(eventType, event, installId);
   } catch (err) {
-    console.warn("slack event dispatch error:", (err as Error).message);
+    rawConsole.warn("slack event dispatch error:", (err as Error).message);
   }
   if (handled && stored[0]) {
     await sql`UPDATE slack_events SET handled = TRUE WHERE id = ${stored[0].id}::uuid`;
@@ -273,7 +274,7 @@ async function dispatchSlackEvent(
   if (type !== "app_mention" && type !== "message") return false;
   const text = typeof event.text === "string" ? event.text : "";
   if (text.length === 0) return false;
-  console.log(`[slack] ${type} → install=${installId} text=${text.slice(0, 120)}`);
+  rawConsole.log(`[slack] ${type} → install=${installId} text=${text.slice(0, 120)}`);
   // Mark as handled so audit shows we processed it; downstream reply
   // would call chat.postMessage here using the decrypted bot token.
   return true;

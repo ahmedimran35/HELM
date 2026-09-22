@@ -32,6 +32,8 @@ import { requireAuth } from "../middleware/auth.ts";
 import { requireAdmin } from "../middleware/role.ts";
 import { logAudit } from "../lib/audit.ts";
 import { safeError } from "../lib/safe-error.ts";
+import { assertSafeOutboundUrl } from "../lib/safe-fetch.ts";
+import { rawConsole } from "../lib/log.ts";
 
 const ALLOWED_KINDS = new Set(["prompt", "tool", "workflow"]);
 const ALLOWED_SCOPES = new Set(["org", "panel", "user"]);
@@ -486,7 +488,7 @@ async function importFromGit(pack: {
   id: string;
   source_ref: string;
 }): Promise<number> {
-  // Bun.spawn `git clone --depth 1 <url> <dir>`. We discard the URL into a
+  // Bun.spawn `git clone --depth 1 -- <url> <dir>`. We discard the URL into a
   // private tmpdir so the operator can re-import without polluting the
   // repo. A non-zero exit means the clone failed — surface it.
   const dir = tmpDirForPack(pack.id);
@@ -494,8 +496,24 @@ async function importFromGit(pack: {
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
 
+  const ref = pack.source_ref.trim();
+  // Argument-injection guard: a source_ref beginning with "-" would be
+  // parsed by `git clone` as a flag. Values like
+  // `--config=core.sshCommand=<cmd>` are a known clone path to local
+  // command execution. Reject outright (the `--` separator below is the
+  // second line of defence).
+  if (!ref || ref.startsWith("-")) {
+    throw new Error("skill pack source_ref must not start with '-'");
+  }
+  // SSRF guard: only validate network schemes. `git@host:path` (ssh) and
+  // absolute paths are handled as-is; http(s) URLs must resolve to a
+  // public host so a pack can't clone from loopback / cloud metadata.
+  if (/^https?:\/\//i.test(ref)) {
+    await assertSafeOutboundUrl(ref, { allowLocal: false });
+  }
+
   const proc = Bun.spawn({
-    cmd: ["git", "clone", "--depth", "1", pack.source_ref, "."],
+    cmd: ["git", "clone", "--depth", "1", "--", ref, "."],
     cwd: dir,
     stdout: "pipe",
     stderr: "pipe",
@@ -566,7 +584,7 @@ async function ingestDir(packId: string, dir: string): Promise<number> {
       `;
       imported++;
     } catch (err) {
-      console.warn(
+      rawConsole.warn(
         `skill import skipped (${entry.name}): ${(err as Error).message}`,
       );
     }

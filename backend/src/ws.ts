@@ -24,6 +24,7 @@
 // Origin is also checked against WEB_ORIGIN to reject cross-site WS
 // hijacks (mirrors the originGuard behaviour from middleware/security-headers.ts).
 
+import type { ServerWebSocket } from "bun";
 import { sql } from "./db/client.ts";
 import { buildAdapter, getProviderById } from "./providers/registry.ts";
 import { logAudit } from "./lib/audit.ts";
@@ -34,12 +35,12 @@ import {
   setPresence,
   clearPresence,
   getPresence,
-  DEFAULT_STALE_MS,
   type PresenceStatus,
 } from "./lib/presence.ts";
 import { takePanelSnapshot } from "./lib/snapshots.ts";
 import { config } from "./config.ts";
 import { parseSessionCookie } from "./middleware/auth.ts";
+import { rawConsole } from "./lib/log.ts";
 
 export interface PanelSocketData {
   panelId: string;
@@ -47,6 +48,19 @@ export interface PanelSocketData {
   username: string;
   name: string;
   role: "admin" | "user";
+  /** Back-reference to the raw socket, set on open so broadcast() can
+   *  reach this peer. */
+  _raw?: { send(data: string): void };
+}
+
+/** Minimal shape of the Bun server passed to handlePanelUpgrade. Typed
+ *  structurally so the module stays decoupled from Bun's Server generics
+ *  while still matching the real `upgrade` signature. */
+interface UpgradeServer {
+  upgrade(
+    req: Request,
+    opts: { headers?: HeadersInit; data: PanelSocketData },
+  ): boolean;
 }
 
 const sockets = new Map<string, Set<PanelSocketData>>(); // panelId -> set
@@ -152,7 +166,7 @@ function flushPanel(panelId: string) {
   const frame = queue.length === 1 ? queue[0]! : JSON.stringify(queue);
   for (const peer of set) {
     try {
-      (peer as PanelSocketData & { _raw?: { send: (d: string) => void } })._raw?.send(frame);
+      peer._raw?.send(frame);
     } catch {
       /* ignore dead sockets */
     }
@@ -171,7 +185,7 @@ export function broadcast(panelId: string, msg: unknown) {
     const payload = JSON.stringify(msg);
     for (const peer of set) {
       try {
-        (peer as PanelSocketData & { _raw?: { send: (d: string) => void } })._raw?.send(payload);
+        peer._raw?.send(payload);
       } catch {
         /* ignore dead sockets */
       }
@@ -214,7 +228,7 @@ async function broadcastPresence(panelId: string): Promise<void> {
     const list = await getPresence(panelId);
     broadcast(panelId, { type: "presence_update", panel_id: panelId, users: list });
   } catch (err) {
-    console.warn("broadcastPresence failed:", (err as Error).message);
+    rawConsole.warn("broadcastPresence failed:", (err as Error).message);
   }
 }
 
@@ -231,7 +245,7 @@ async function authFromRequest(req: Request): Promise<PanelSocketData | null> {
   if (origin) {
     const expected = (config.web.origin ?? process.env.WEB_ORIGIN ?? "").replace(/\/$/, "");
     if (expected && origin !== expected) {
-      console.warn(`ws upgrade rejected: bad origin=${origin}`);
+      rawConsole.warn(`ws upgrade rejected: bad origin=${origin}`);
       return null;
     }
   }
@@ -248,7 +262,7 @@ async function authFromRequest(req: Request): Promise<PanelSocketData | null> {
   const user = await loadUserForSession(sessionId);
   if (!user) return null;
   if (!user.is_active) {
-    console.warn(`ws upgrade rejected: inactive user=${user.username}`);
+    rawConsole.warn(`ws upgrade rejected: inactive user=${user.username}`);
     return null;
   }
   if (user.role !== "admin") {
@@ -268,7 +282,6 @@ async function authFromRequest(req: Request): Promise<PanelSocketData | null> {
   // the user might be on a mobile network that NATs them, and a
   // false positive would brick legitimate users. We DO alert so the
   // operator can investigate (revoke + force password change).
-  let ipForEvent: string | null = null;
   try {
     const ipRows = await sql<{ ip: string | null }[]>`
       SELECT ip FROM sessions WHERE id = ${sessionId} LIMIT 1
@@ -289,7 +302,6 @@ async function authFromRequest(req: Request): Promise<PanelSocketData | null> {
         const xr = req.headers.get("x-real-ip");
         currentIp = cf?.trim() || xr?.trim() || null;
       }
-      ipForEvent = currentIp;
       if (currentIp && currentIp !== storedIp) {
         logSecurityEvent({
           type: "session_hijack_suspect",
@@ -308,7 +320,7 @@ async function authFromRequest(req: Request): Promise<PanelSocketData | null> {
       }
     }
   } catch (err) {
-    console.warn("session IP check failed:", (err as Error).message);
+    rawConsole.warn("session IP check failed:", (err as Error).message);
   }
   return {
     panelId,
@@ -319,7 +331,7 @@ async function authFromRequest(req: Request): Promise<PanelSocketData | null> {
   };
 }
 
-export async function handlePanelUpgrade(req: Request, server: any): Promise<Response> {
+export async function handlePanelUpgrade(req: Request, server: UpgradeServer): Promise<Response> {
   const ctx = await authFromRequest(req);
   if (!ctx) {
     return new Response("forbidden", { status: 403 });
@@ -335,11 +347,11 @@ export async function handlePanelUpgrade(req: Request, server: any): Promise<Res
 // Bun-style handler hooks — wired from index.ts so the websocket
 // events fire on the ServerWebSocket object directly.
 export const panelWS = {
-  async open(ws: any) {
-    const data = ws.data as PanelSocketData;
+  async open(ws: ServerWebSocket<PanelSocketData>) {
+    const data = ws.data;
     joinPanel(data.panelId, data);
     // Stash a back-reference so broadcast() can reach this peer.
-    (data as any)._raw = ws;
+    data._raw = ws;
     // Mark this user as "viewing" the panel and tell the room. Doing
     // it on open means every other connected client immediately sees
     // a fresh presence dot in the header / member stack.
@@ -347,12 +359,12 @@ export const panelWS = {
       await setPresence(data.panelId, data.userId, "viewing", null);
       await broadcastPresence(data.panelId);
     } catch (err) {
-      console.warn("presence open failed:", (err as Error).message);
+      rawConsole.warn("presence open failed:", (err as Error).message);
     }
     ws.send(JSON.stringify({ type: "ready", panelId: data.panelId, name: data.name }));
   },
-  async close(ws: any) {
-    const data = ws.data as PanelSocketData;
+  async close(ws: ServerWebSocket<PanelSocketData>) {
+    const data = ws.data;
     leavePanel(data.panelId, data);
     // Only remove the presence row when the LAST socket for this user
     // closes. A single user can have multiple tabs open; we don't want
@@ -366,12 +378,12 @@ export const panelWS = {
         await clearPresence(data.panelId, data.userId);
         await broadcastPresence(data.panelId);
       } catch (err) {
-        console.warn("presence close failed:", (err as Error).message);
+        rawConsole.warn("presence close failed:", (err as Error).message);
       }
     }
   },
-  async message(ws: any, raw: string | Buffer) {
-    const data = ws.data as PanelSocketData;
+  async message(ws: ServerWebSocket<PanelSocketData>, raw: string | Buffer) {
+    const data = ws.data;
     let parsed: unknown;
     try {
       parsed = JSON.parse(typeof raw === "string" ? raw : String(raw));
@@ -397,7 +409,7 @@ export const panelWS = {
         await setPresence(data.panelId, data.userId, msg.status, msg.cursor_block);
         await broadcastPresence(data.panelId);
       } catch (err) {
-        console.warn("presence update failed:", (err as Error).message);
+        rawConsole.warn("presence update failed:", (err as Error).message);
       }
       return;
     }
@@ -839,7 +851,7 @@ export const panelWS = {
           userId: data.userId,
         });
       } catch (err) {
-        console.warn("snapshot failed:", (err as Error).message);
+        rawConsole.warn("snapshot failed:", (err as Error).message);
       }
       await logAudit({
         userId: data.userId,

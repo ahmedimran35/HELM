@@ -11,7 +11,7 @@
 import { useEffect, useState } from "react";
 import { apiGet, apiPost } from "../api/client";
 import { EmptyState } from "../components/ui/feedback/EmptyState";
-import { Skeleton, SkeletonTable } from "../components/ui/feedback/Skeleton";
+import { SkeletonTable } from "../components/ui/feedback/Skeleton";
 import { StatusPill } from "../components/ui/feedback/StatusPill";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";

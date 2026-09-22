@@ -11,7 +11,7 @@ import { Avatar } from "../components/ui/Avatar";
 import { Button } from "../components/ui/Button";
 import { EmptyState } from "../components/ui/feedback/EmptyState";
 import { Skeleton, SkeletonText } from "../components/ui/feedback/Skeleton";
-import { Sparkline, StatTile } from "../components/ui/data/charts";
+import { StatTile } from "../components/ui/data/charts";
 import { StatusPill } from "../components/ui/feedback/StatusPill";
 import { CallSign } from "../components/ui/CallSign";
 import {
@@ -26,7 +26,6 @@ import {
   DollarSignIcon,
   ClockIcon,
   InboxIcon,
-  BellIcon,
   SkillsIcon,
   PlayIcon,
   TerminalIcon,
@@ -82,7 +81,7 @@ export function HomePage() {
   const { addToast } = useToast();
   const navigate = useNavigate();
   const [panels, setPanels] = useState<PanelSummary[] | null>(null);
-  const [models, setModels] = useState<ModelRow[] | null>(null);
+  const [, setModels] = useState<ModelRow[] | null>(null);
   const [sandbox, setSandbox] = useState<SandboxState | null>(null);
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
   const [activity, setActivity] = useState<AuditRow[] | null>(null);
@@ -92,7 +91,7 @@ export function HomePage() {
   useEffect(() => {
     apiGet<PanelSummary[]>("/panels").then(setPanels).catch(() => setPanels([]));
     apiGet<ModelRow[]>("/models").then(setModels).catch(() => setModels([]));
-    if (user) {
+    if (user?.id) {
       apiGet<SandboxState>("/workspace/sandbox")
         .then(setSandbox)
         .catch(() => setSandbox(null));

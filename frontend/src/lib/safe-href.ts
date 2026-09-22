@@ -20,11 +20,11 @@
 // characters. The return is the original URL when it's safe, or "#"
 // (a no-op) otherwise.
 
-const SAFE_PROTOCOL = /^(https?|mailto):/i;
-const SAFE_PATH = /^\/(?![\/\\])/; // internal SPA path, no leading slash traversal
+const SAFE_PATH = /^\/(?![/\\])/; // internal SPA path, no leading slash traversal
 
 export function isSafeHref(url: unknown): boolean {
   if (typeof url !== "string" || url.length === 0) return false;
+  // eslint-disable-next-line no-control-regex
   if (/[\x00-\x1f\x7f]/.test(url)) return false;
   // Reject the schemes the browser will execute script from. This is
   // the canonical allow-list per the WHATWG URL spec.

@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 // Log level gate.
 //
 // Console output is expensive (each call serialises + flushes to

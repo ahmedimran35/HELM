@@ -14,6 +14,7 @@
 
 import { sql } from "../../db/client.ts";
 import { logAudit } from "../audit.ts";
+import { rawConsole } from "../../lib/log.ts";
 
 export interface SearchSource {
   title: string;
@@ -138,7 +139,7 @@ export async function runLiveWebSearch(
     });
     return { sources, summary };
   } catch (err) {
-    console.warn("[chat] web_search failed:", (err as Error).message);
+    rawConsole.warn("[chat] web_search failed:", (err as Error).message);
     return { sources: [], summary: null };
   }
 }

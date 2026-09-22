@@ -573,7 +573,7 @@ function htmlToText(html: string): string {
  *  follows the AI-answer marker and contains a long paragraph. */
 function extractBraveAnswerBoxFromHTML(html: string): string | null {
   // Look for the AI-answer marker followed by a long paragraph
-  const m = html.match(/AI[\u2010-\u2015\-]?generated[^<]*<\/[^>]+>\s*<([a-z]+)[^>]*>([\s\S]{120,1500}?)<\/\1>/i);
+  const m = html.match(/AI[\u2010-\u2015-]?generated[^<]*<\/[^>]+>\s*<([a-z]+)[^>]*>([\s\S]{120,1500}?)<\/\1>/i);
   if (m) return stripTags(m[2] ?? "").trim();
   return null;
 }

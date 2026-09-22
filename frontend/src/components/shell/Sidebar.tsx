@@ -14,7 +14,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "../../auth/AuthContext";
 import { useTheme } from "../../theme/ThemeProvider";
-import { groupedNav, groupLabel, type NavGroup, visibleNav } from "../../nav/items";
+import { groupedNav, groupLabel, type NavGroup } from "../../nav/items";
 import { Avatar } from "../ui/Avatar";
 import { PresenceDot } from "../ui/data/PresenceDot";
 import { Button } from "../ui/Button";
@@ -42,9 +42,10 @@ export function Sidebar({ onNavigate }: Props) {
   const [filter, setFilter] = useState("");
   const searchRef = useRef<HTMLInputElement | null>(null);
 
-  if (!user) return null;
-
-  const groups = useMemo(() => groupedNav(user.role), [user.role]);
+  // NOTE: the `if (!user) return null` guard lives *after* every hook
+  // below. Returning early before a hook changes the hook order between
+  // renders (user null → non-null) and breaks React's rules of hooks.
+  const groups = useMemo(() => groupedNav(user?.role ?? "user"), [user?.role]);
 
   // Filter groups: keep only items whose label or hint matches the
   // filter (case-insensitive). Groups with zero matches drop out.
@@ -75,6 +76,8 @@ export function Sidebar({ onNavigate }: Props) {
       setCollapsed({ chat: false, build: false, run: false, discover: false, operate: false });
     }
   }, [filter]);
+
+  if (!user) return null;
 
   function toggle(g: NavGroup) {
     setCollapsed((c) => ({ ...c, [g]: !c[g] }));
@@ -156,7 +159,6 @@ export function Sidebar({ onNavigate }: Props) {
         )}
         {filteredGroups.map(({ group, items, matched }) => {
           const isOpen = collapsed[group];
-          const Icon = NAV_ICONS[items[0]?.path ?? "/"] ?? (() => null);
           const matchedPaths = matched as Set<string>;
           const showItems = !filter.trim() ? items : items.filter((it) => matchedPaths.has(it.path));
           return (

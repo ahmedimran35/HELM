@@ -6,6 +6,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sql } from "./client.ts";
+import { rawConsole } from "../lib/log.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MIG_DIR = join(HERE, "migrations");
@@ -46,7 +47,7 @@ export async function runMigrations(): Promise<{ applied: string[]; skipped: str
       await tx`INSERT INTO schema_migrations (id) VALUES (${id})`;
     });
     applied.push(id);
-    console.log(`  ✓ applied ${id}`);
+    rawConsole.log(`  ✓ applied ${id}`);
   }
   return { applied, skipped };
 }
@@ -56,14 +57,14 @@ if (import.meta.main) {
   try {
     const result = await runMigrations();
     if (result.applied.length === 0) {
-      console.log(`✓ schema is up to date (${result.skipped.length} already applied)`);
+      rawConsole.log(`✓ schema is up to date (${result.skipped.length} already applied)`);
     } else {
-      console.log(`✓ applied ${result.applied.length} migration(s); ${result.skipped.length} already applied`);
+      rawConsole.log(`✓ applied ${result.applied.length} migration(s); ${result.skipped.length} already applied`);
     }
     await sql.end();
     process.exit(0);
   } catch (err) {
-    console.error("✗ migration failed:", err);
+    rawConsole.error("✗ migration failed:", err);
     process.exit(1);
   }
 }

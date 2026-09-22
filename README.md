@@ -25,12 +25,12 @@ It's designed for organisations that want:
 
 It is **not** a thin wrapper over OpenAI. HELM ships:
 
-- A **hand-rolled SVG workflow editor** (3.5k LoC, no third-party deps)
+- A **hand-rolled SVG workflow editor** (~4.0k LoC, no third-party deps)
 - A **multiplayer panel chat** with WebSocket, presence, snapshots, replay
 - A **real-time response cache** with configurable TTL
 - A **lightpanda-based free web search** engine (no API key required)
 - A **14-provider health probe** that shows real-time OpenAI/Anthropic/etc. status
-- An **encrypted sandbox** with symlink rejection + unshare namespaces
+- A **sandbox** with per-user working dirs, symlink-rejecting file APIs, and opt-in `unshare` namespaces (exec is off by default)
 - A **marketplace** for apps, skills, and agents
 
 ---
@@ -132,10 +132,10 @@ Bun + Hono on port 3000. Single binary, single SQL connection pool, single WebSo
 │  • requireAuth                                          │
 │  • rateLimit (Redis / mem)                              │
 │  ┌──────────────────────────────────────────────────┐  │
-│  │ Routes ── 45 modules ── 200+ endpoints            │  │
+│  │ Routes ── 45 modules ── 200 endpoints            │  │
 │  └──────────────────────────────────────────────────┘  │
 │  ┌──────────────────────┐  ┌───────────────────┐      │
-│  │ Lib ── 50 modules     │  │ Harness / WS       │      │
+│  │ Lib ── 34 modules     │  │ Harness / WS       │      │
 │  │ safe-fetch, alerts,  │  │ OpenAI / Anthropic │      │
 │  │ cron, retrieve,      │  │ WebSocket panel    │      │
 │  │ response-cache, ...  │  │ multiplayer chat   │      │
@@ -153,13 +153,13 @@ The frontend chunks into **vendor + per-page** for cache-friendly deploys:
 ```
 vendor-react-*.js    156 kB raw / 50 kB gzip   ← React + React Router (cached)
 index-*.js            86 kB raw / 26 kB gzip    ← App shell
-Chat-*.js             46 kB raw / 13 kB gzip    ← Per-page chunks (lazy)
+Chat-*.js             47 kB raw / 13 kB gzip    ← Per-page chunks (lazy)
 Panels-*.js           39 kB raw / 11 kB gzip
-Workflows-*.js        74 kB raw / 20 kB gzip
-... 25 more page chunks (3-12 kB gzip each)
+Workflows-*.js        74 kB raw / 21 kB gzip
+... 37 more chunks (0.3–9 kB gzip each; most pages < 4 kB)
 ```
 
-After the first visit, navigating to a new page only downloads the page chunk (3-12 kB gzipped) — not the full React/Router stack.
+After the first visit, navigating to a new page only downloads that page's chunk — not the full React/Router stack.
 
 ---
 
@@ -186,7 +186,7 @@ After the first visit, navigating to a new page only downloads the page chunk (3
 
 ### Visual workflow editor
 
-Hand-rolled SVG editor (no `react-flow` dep). 3.5k LoC across 10 files.
+Hand-rolled SVG editor (no `react-flow` dep). ~4.0k LoC across 14 files.
 
 - 6 node kinds: `trigger`, `agent_run`, `panel_message`, `http_post`, `condition`, `delay`
 - Drag-drop, pan/zoom, snap-to-grid (24 px)
@@ -199,10 +199,13 @@ Hand-rolled SVG editor (no `react-flow` dep). 3.5k LoC across 10 files.
 ### Watches (event-driven background work)
 
 - **Cron** — `cron-parser`, no DST bugs, custom cron editor
-- **Webhook** — HMAC-style `Bearer` secret ≥16 chars, constant-time compare, 5-min replay window
-- **File** — server-side `notify` events
-- **Email** — from + subject regex trigger
+- **Webhook** — mandatory `Bearer` secret (≥16 chars) compared in constant time. No request-timestamp check, so a captured request can be replayed — treat the secret as the only guard.
+- **Manual** — fire a watch on demand via the API
 - Every fire persisted to `watch_runs` with status, payload, response
+
+`file` and `email` exist as accepted `source` values but have no firing
+path: nothing watches the filesystem, and there is no inbound-mail
+handler. Only `schedule`, `webhook`, and `manual` watches actually run.
 
 ### Apps (sandboxed web bundles)
 
@@ -213,12 +216,34 @@ Hand-rolled SVG editor (no `react-flow` dep). 3.5k LoC across 10 files.
 
 ### Sandbox
 
-- Per-user scoped temp dir at `tmp/sandbox/{user_id}/`
-- `bash -c` (no login profile scripts — prevents persistence)
-- Restricted env — no `SESSION_SECRET`, `DATABASE_URL`, etc.
-- `safeJoin` + `lstat` symlink rejection
-- Optional `unshare` namespace isolation (Linux only, set `SANDBOX_USE_UNSHARE=1`)
-- Output caps + 60s timeout
+> **Shell exec is disabled by default.** The plain `bash -c` path is not
+> a jail — there is no chroot, seccomp filter, or capability drop, so it
+> can read host files and other users' sandbox dirs. The exec endpoint
+> returns `403 sandbox_isolation_required` unless you explicitly opt in.
+
+- Per-user working dir at `tmp/sandbox/{user_id}/`; each session gets its own scratch `TMPDIR`
+- File API rejects symlinks (`lstat`) and `../` traversal (`safeJoin`)
+- Restricted env — `PATH`/`HOME`/`TMPDIR` only; no `SESSION_SECRET`, `DATABASE_URL`, etc.
+- Output caps — 512 KB per stream; timeout defaults to 30 s, max 5 min
+- Files are stored **unencrypted** (local disk + `file_blobs`)
+
+To enable exec, pick one:
+
+- `SANDBOX_USE_UNSHARE=1` — Linux only. Wraps exec in
+  `unshare --user --map-root-user --net --mount-proc --pid --fork`,
+  giving the child its own user/net/pid namespaces (netns = no external
+  connectivity). The per-exec response reports `isolation: "unshare"`.
+  The server probes for the `unshare` binary at boot; if it is missing
+  (or the env var is set on a non-Linux host) exec stays **disabled**
+  and the boot log says so, rather than advertising isolation it
+  cannot provide.
+- `SANDBOX_ALLOW_UNSAFE_EXEC=1` — single-user dev hosts only (e.g.
+  macOS, which lacks `unshare(1)`). Plain `bash -c`, no namespace
+  isolation. Never set this multi-tenant or in production.
+
+Not implemented: chroot/`pivot_root`, seccomp, `RLIMIT_AS`/`RLIMIT_CPU`,
+capability drop, AppArmor/SELinux, Landlock, and per-user microVMs. See
+SANDBOX-ISOLATION.md for the upgrade path.
 
 ### Voice + browser automation
 
@@ -227,14 +252,14 @@ Hand-rolled SVG editor (no `react-flow` dep). 3.5k LoC across 10 files.
 
 ### Memory + skills + marketplace
 
-- **Memory strategies** — verbatim, summary, semantic, episodic, user-model
+- **Memory strategies** — three kinds: `rows` (verbatim), `summary` (LLM-compressed), and `vector` (semantic search)
 - **Per-user preference learner** runs nightly on recent feedback
 - **Skills** — prompt / tool / workflow scopes, admin-gated promotion
 - **Marketplace** — apps, skills, agents, with reviews
 
 ### Live ops
 
-- **Provider health** — real-time reachability of 14 popular AI providers (OpenAI, Anthropic, Google, Mistral, Cohere, Groq, Together, OpenRouter, Perplexity, DeepSeek, xAI, Hugging Face, Replicate, Fireworks). Live pinged every 30s, no auth required.
+- **Provider health** — real-time reachability of 14 popular AI providers (OpenAI, Anthropic, Google, Mistral, Cohere, Groq, Together, OpenRouter, Perplexity, DeepSeek, xAI, Hugging Face, Replicate, Fireworks). Results are cached for 30 s and refreshed on request; the probe endpoint itself requires no auth.
 - **Notifications** — smart feeds, per-user preferences
 - **Audit log** — every state-changing event with 90-day retention auto-pruner
 - **CSP report receiver** — browser reports CSP violations to `/api/csp-report` for monitoring
@@ -252,7 +277,7 @@ helm/
 ├── CONTRIBUTING.md                    ← dev workflow
 ├── LICENSE                            ← MIT
 │
-├── backend/                           ← 130 .ts files, ~36k LoC
+├── backend/                           ← 140 .ts files, ~31k LoC
 │   ├── Dockerfile
 │   ├── package.json
 │   ├── scripts/                        ← bcrypt compat test, etc.
@@ -263,21 +288,21 @@ helm/
 │       ├── db/                         ← postgres client + 17 migrations
 │       ├── auth/                       ← password, session, lockout, bootstrap
 │       ├── middleware/                 ← auth, security-headers, rate-limit, compress
-│       ├── routes/                     ← 45 modules, ~250 endpoints
-│       ├── lib/                        ← 50 modules (safe-fetch, alerts, …)
+│       ├── routes/                     ← 45 modules, ~200 endpoints
+│       ├── lib/                        ← 34 modules (safe-fetch, alerts, …)
 │       ├── providers/                  ← LLM adapters + AES-256-GCM
 │       ├── harness/                    ← OpenAI / Anthropic / mock / pi / cli
 │       └── cli.ts                      ← dev CLI
 │
-├── frontend/                          ← 132 .ts/.tsx files, ~24k LoC
+├── frontend/                          ← 86 .ts/.tsx files, ~30k LoC
 │   ├── package.json
 │   ├── vite.config.ts
 │   └── src/
 │       ├── main.tsx, App.tsx
-│       ├── pages/                      ← 40 pages (lazy-loaded)
-│       │   ├── workflow-editor/        ← 10 files, 3.5k LoC, hand-rolled SVG
+│       ├── pages/                      ← 40 page components (lazy-loaded)
+│       │   ├── workflow-editor/        ← 14 files, ~4.0k LoC, hand-rolled SVG
 │       │   ├── Panels.tsx, Chat.tsx, Providers.tsx, Health.tsx
-│       │   └── … (37 more)
+│       │   └── … (36 more)
 │       ├── components/                 ← UI + system + shell
 │       ├── theme/                      ← ThemeProvider (light/dark)
 │       ├── styles/                     ← CSS tokens + animations
@@ -295,7 +320,7 @@ helm/
 └── apps-bundles/                     ← marketplace app bundles (HTML/JS)
 ```
 
-**Total**: ~60k LoC across 136 .ts/.tsx files + 17 migrations.
+**Total**: ~61k LoC across 226 .ts/.tsx files + 17 migrations.
 
 ---
 
@@ -309,7 +334,7 @@ cd backend
 bun install
 bun run dev              # dev server with --watch
 bun run typecheck        # tsc --noEmit
-bun test                 # 42 tests across 5 files
+bun test                 # 107 tests across 11 files
 bun run test:bcrypt      # bcrypt 2.x → 3.x compatibility check
 bun run build            # production bundle
 
@@ -329,18 +354,25 @@ cd backend && bun run db:migrate
 
 ### Testing
 
-42 unit tests covering:
+107 tests across 11 files covering:
+
 - `crypto.ts` — AES-256-GCM, AAD binding, v1/v2 transition, malformed input
 - `response-cache.ts` — hash, per-scope, expires_at, TTL kill switch
+- `safe-fetch.ts` — SSRF / private-IP guard, redirect handling
 - `panel-membership.ts` — member / non-member / admin bypass
 - `panels.ts` — IDOR guards (admin bypass, member-only routes)
 - `role.ts` — auth + admin middleware
+- `workflow-runner.ts` — graph validation + condition predicates
+- `_contract.ts` — authz contract matrix (anonymous / user / admin per route)
+
+Note: two `safe-fetch` cases fail without outbound DNS (they resolve
+`example.com`); they pass on a networked host.
 
 ```bash
 $ cd backend && bun test
- 42 pass
- 0 fail
- 74 expect() calls
+ 105 pass
+ 2 fail   # DNS-dependent; see above
+ 177 expect() calls
 ```
 
 ### Code style
@@ -474,7 +506,7 @@ See [SECURITY.md](./SECURITY.md).
 | Backend RSS | ~58 MB |
 | Backend CPU | ~0.05 % (idle) |
 | Postgres total | ~13 MB |
-| Frontend dist | ~628 KB (gzip ~210 KB) |
+| Frontend dist | ~694 KB raw (gzip ~212 KB) |
 
 ### Optimizations in place
 
@@ -484,7 +516,7 @@ See [SECURITY.md](./SECURITY.md).
 - **Hot-path cache headers** — `Cache-Control: private, max-age=N` for `/api/me`, `/api/models`, `/api/bootstrap-status`
 - **WebSocket frame batching** — 30 ms coalesce window for non-critical messages
 - **Response cache** — 1-hour TTL with hourly sweeper for expired rows
-- **Vendor chunk split** — 50 kB gzipped React bundle cached once, only 3-12 kB per page
+- **Vendor chunk split** — 50 kB gzipped React bundle cached once; per-page chunks are mostly < 4 kB gzipped
 - **DB pool** — 10 connections + 30 min `max_lifetime` recycle
 - **Slow-query logging** — 200 ms threshold via `timed()` wrapper
 - **Log gate** — `HELM_LOG_LEVEL=warn` silences info in production
@@ -505,7 +537,7 @@ See [SECURITY.md](./SECURITY.md).
 | [README.md](./README.md) | This file — overview, setup, architecture |
 | [HARDENING.md](./HARDENING.md) | Deployment recipe: iptables, k8s NetPol, secrets rotation, backups |
 | [SECURITY.md](./SECURITY.md) | Security policy + disclosure |
-| [SECURITY-SCORE-9.5.md](./SECURITY-SCORE-9.5.md) | Detailed security audit + 9.5/10 score |
+| [SECURITY-SCORE-9.5.md](./SECURITY-SCORE-9.5.md) | Self-assessed hardening notes (not an independent audit) |
 | [BACKUP-RESTORE.md](./BACKUP-RESTORE.md) | PG backup / restore runbook |
 | [EGRESS-FIREWALL.md](./EGRESS-FIREWALL.md) | iptables + nginx proxy lockdown |
 | [INCIDENT-RESPONSE.md](./INCIDENT-RESPONSE.md) | P1-P4 incident runbook |
@@ -528,7 +560,7 @@ See [SECURITY.md](./SECURITY.md).
 | **Web framework** | Hono 4 | Fastify |
 | **Frontend** | React 18 + Vite | Lit + Vite |
 | **Database** | Postgres 16 | Postgres 14+ |
-| **Visual workflow editor** | ✅ 3,527 LoC, hand-rolled SVG | ❌ |
+| **Visual workflow editor** | ✅ ~3,977 LoC, hand-rolled SVG | ❌ |
 | **Slack first-class** | Future plugin | ✅ |
 | **Standout feature** | **Visual workflow editor** | **Slack-first** |
 | **Stars** | new | ~13k |

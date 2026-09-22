@@ -61,7 +61,7 @@ what you know, follow with what you're doing.
 
 ## 5. Tooling
 
-- **Audit log** — `SELECT * FROM audit_log WHERE ts > now() - interval '24 hours'`
+- **Audit log** — `SELECT * FROM audit_log WHERE created_at > now() - interval '24 hours'`
   (read-only role)
 - **Container shell** — `kubectl exec -it deploy/api -- /bin/sh`
   (requires `kubectl-can-exec` IAM binding)

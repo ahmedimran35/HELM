@@ -6,11 +6,18 @@ node_modules/
 # bun
 bun.lockb
 
-# env
+# env — ignore every .env variant, keep only the example
 .env
-.env.local
-.env.*.local
+.env.*
 !.env.example
+
+# generated runtime secrets (written by `bun src/cli.ts`; contains
+# real SESSION_SECRET / ADMIN_PASSWORD — never commit)
+.helm-secrets
+backend/.helm-secrets
+
+# sandbox working dirs (per-user scratch + files written by exec)
+tmp/
 
 # build outputs
 dist/

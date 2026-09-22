@@ -10,6 +10,7 @@
 
 import { sql } from "../db/client.ts";
 import { config } from "../config.ts";
+import { rawConsole } from "../lib/log.ts";
 
 export interface SessionRow {
   id: string;
@@ -115,7 +116,7 @@ export async function touchSession(
       `;
     }
   } catch (err) {
-    console.warn("touchSession failed:", (err as Error).message);
+    rawConsole.warn("touchSession failed:", (err as Error).message);
   }
 }
 

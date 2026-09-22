@@ -152,10 +152,10 @@ services:
       # path. To switch to a long-running Lightpanda daemon, set
       # WEB_SEARCH_LIGHTPANDA_URL=http://lightpanda:9222.
       LIGHTPANDA_BIN: lightpanda
-      # Optional: pay-per-call provider (Brave / Tavily). Lightpanda is
-      # the default; these only run if Lightpanda is disabled.
-      WEB_SEARCH_BRAVE_KEY: ${WEB_SEARCH_BRAVE_KEY:-}
-      WEB_SEARCH_TAVILY_KEY: ${WEB_SEARCH_TAVILY_KEY:-}
+      # Optional: pay-per-call providers (Brave / Tavily). Lightpanda is
+      # the default; these only run if Lightpanda is disabled.  Keys are
+      # configured in-app (admin API → web_search_keys table), not via
+      # these env vars — they are kept for operator reference only.
     ports:
       - "3000:3000"
 

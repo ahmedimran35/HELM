@@ -17,6 +17,7 @@
 import { sql } from "../db/client.ts";
 import { getHarnessByKind } from "../harness/router.ts";
 import type { Harness } from "../harness/types.ts";
+import { rawConsole } from "../lib/log.ts";
 
 const CHUNK_SIZE = 20;
 const DEFAULT_WINDOW_DAYS = 30;
@@ -133,7 +134,7 @@ async function callSummariser(harness: Harness, chunkText: string): Promise<stri
       if (c.delta) assembled += c.delta;
     }
   } catch (err) {
-    console.warn("[auto-summarize] harness call failed:", (err as Error).message);
+    rawConsole.warn("[auto-summarize] harness call failed:", (err as Error).message);
     return null;
   }
   const trimmed = assembled.trim();
@@ -172,7 +173,7 @@ export function startAutoSummarizeScheduler(): void {
     void tick();
     schedulerHandle = setInterval(() => void tick(), ONE_DAY_MS);
   }, delay);
-  console.log("✓ auto-summarize scheduler armed (next run in",
+  rawConsole.log("✓ auto-summarize scheduler armed (next run in",
     Math.round(delay / 60_000), "min)");
 }
 
@@ -201,13 +202,13 @@ async function tick(): Promise<void> {
     `;
     for (const p of panels) {
       await autoSummarizePanel(p.id, DEFAULT_WINDOW_DAYS).catch((err) =>
-        console.warn("[auto-summarize] panel failed:", p.id, (err as Error).message),
+        rawConsole.warn("[auto-summarize] panel failed:", p.id, (err as Error).message),
       );
     }
     if (panels.length > 0) {
-      console.log("✓ auto-summarize: processed", panels.length, "panels");
+      rawConsole.log("✓ auto-summarize: processed", panels.length, "panels");
     }
   } catch (err) {
-    console.warn("[auto-summarize] tick failed:", (err as Error).message);
+    rawConsole.warn("[auto-summarize] tick failed:", (err as Error).message);
   }
 }

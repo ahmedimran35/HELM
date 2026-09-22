@@ -46,7 +46,6 @@ export function PresenceDot({
   className = "",
   title,
 }: Props) {
-  const ringSize = size + 2;
   return (
     <span
       className={cn(

@@ -13,6 +13,7 @@
 // the apps-embed iframe route.
 
 import { sql } from "../client.ts";
+import { rawConsole } from "../../lib/log.ts";
 
 interface SeedApp {
   slug: string;
@@ -73,11 +74,11 @@ export async function seedAppsIfEmpty(): Promise<AppsSeedResult> {
   });
 
   if (result.seeded) {
-    console.log(
+    rawConsole.log(
       `✓ apps seed: inserted ${result.inserted} demo app(s) (standup, notes, inbox)`,
     );
   } else {
-    console.log("✓ apps seed: apps table non-empty, skipping seed");
+    rawConsole.log("✓ apps seed: apps table non-empty, skipping seed");
   }
   return result;
 }

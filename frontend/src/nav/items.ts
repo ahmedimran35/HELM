@@ -82,7 +82,6 @@ export function groupedNav(role: Role): Array<{ group: NavGroup; items: NavItem[
     { group: "discover", items: [] },
     { group: "operate", items: [] },
   ];
-  const seen = new Set<NavGroup>();
   for (const item of NAV_ITEMS) {
     if (item.adminOnly && role !== "admin") continue;
     const bucket = out.find((b) => b.group === item.group);

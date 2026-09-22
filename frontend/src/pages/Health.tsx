@@ -99,8 +99,6 @@ export function HealthPage() {
   }, []);
 
   const summary = data?.summary;
-  const allUp = summary && summary.up === summary.up + summary.degraded + summary.down + summary.unknown;
-  const anyDown = summary && summary.down > 0;
 
   return (
     <div className="p-6 max-w-[960px] space-y-6">

@@ -19,6 +19,7 @@ import { Hono } from "hono";
 import { sql } from "../db/client.ts";
 import { requireAuth } from "../middleware/auth.ts";
 import { logAudit } from "../lib/audit.ts";
+import { rawConsole } from "../lib/log.ts";
 
 const router = new Hono();
 router.use("*", requireAuth);
@@ -188,7 +189,7 @@ export function startApprovalSweeper(): void {
   if (sweepTimer) return;
   sweepTimer = setInterval(() => {
     sweepExpiredApprovals().catch((err) =>
-      console.warn("approval sweep failed:", (err as Error).message),
+      rawConsole.warn("approval sweep failed:", (err as Error).message),
     );
   }, 60_000);
 }

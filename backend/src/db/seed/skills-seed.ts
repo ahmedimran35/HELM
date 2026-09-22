@@ -8,6 +8,7 @@
 // against a non-empty table leaves existing data untouched.
 
 import { sql } from "../client.ts";
+import { rawConsole } from "../../lib/log.ts";
 
 interface SeedSkill {
   name: string;
@@ -107,11 +108,11 @@ export async function runSkillsSeed(): Promise<SkillsSeedResult> {
   });
 
   if (result.seeded) {
-    console.log(
+    rawConsole.log(
       `✓ skills seed: inserted ${result.inserted} starter skill(s) (Web Search, Code Review, Daily Standup)`,
     );
   } else {
-    console.log("✓ skills seed: skills table non-empty, skipping seed");
+    rawConsole.log("✓ skills seed: skills table non-empty, skipping seed");
   }
   return result;
 }

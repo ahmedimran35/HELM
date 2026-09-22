@@ -78,6 +78,10 @@ function ServiceBlock({
   useEffect(() => {
     setUrl(existing?.webhook_url ?? "");
     setEvents(existing?.events ?? []);
+    // Intentionally keyed on the selected integration's id. Depending on
+    // `existing.events` would loop: the `?? []` fallback produces a new
+    // array identity on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [existing?.id]);
 
   function toggleEvent(e: string) {

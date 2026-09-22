@@ -25,7 +25,6 @@ import { Badge } from "../components/ui/Badge";
 import { EmptyState } from "../components/ui/feedback/EmptyState";
 import { useToast } from "../components/ui/feedback/Toast";
 import {
-  XIcon,
   CheckIcon,
   StarIcon,
   DownloadIcon,

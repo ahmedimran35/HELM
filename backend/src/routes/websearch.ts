@@ -23,10 +23,11 @@ import { requireAuth } from "../middleware/auth.ts";
 import { requireAdmin } from "../middleware/role.ts";
 import { logAudit } from "../lib/audit.ts";
 import { validate, validationErrorResponse } from "../lib/validate.ts";
-import { lightpandaFetch, lightpandaSearch, lightpandaSearchWithTopPage } from "../lib/lightpanda.ts";
+import { lightpandaFetch, lightpandaSearchWithTopPage } from "../lib/lightpanda.ts";
 import { assertSafeOutboundUrl, SafeFetchError } from "../lib/safe-fetch.ts";
 import { assertSafeBaseUrl } from "../providers/registry.ts";
 import { safeError } from "../lib/safe-error.ts";
+import { rawConsole } from "../lib/log.ts";
 
 const router = new Hono();
 router.use("*", requireAuth);
@@ -298,7 +299,7 @@ async function callLightpandaSearch(
       await assertSafeOutboundUrl(url, { allowLocal: false });
     } catch (err) {
       if (err instanceof SafeFetchError) {
-        console.warn("[websearch] safe_blocked url:", (err as Error).message);
+        rawConsole.warn("[websearch] safe_blocked url:", (err as Error).message);
         return {
           query,
           service: "safe_blocked",
@@ -533,7 +534,7 @@ router.post("/", async (c) => {
         auto_configured: configured.length === 0 || configured[0]?.service === "lightpanda",
       });
     } catch (err) {
-      console.warn("[websearch] search failed:", (err as Error).message);
+      rawConsole.warn("[websearch] search failed:", (err as Error).message);
       lastErr = (err as Error).message;
       await logAudit({
         userId: user.id,

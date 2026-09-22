@@ -28,7 +28,7 @@ import integrationRoutes from "./routes/integrations.ts";
 import { skillsRouter, packsRouter } from "./routes/skills.ts";
 import quotaRoutes from "./routes/quotas.ts";
 import harnessRoutes from "./routes/harness.ts";
-import { handlePanelUpgrade, panelWS } from "./ws.ts";
+import { handlePanelUpgrade, panelWS, type PanelSocketData } from "./ws.ts";
 import { rateLimit, rateLimitByBody } from "./middleware/ratelimit.ts";
 import { securityHeaders, originGuard } from "./middleware/security-headers.ts";
 import { requestMetrics } from "./middleware/metrics.ts";
@@ -50,6 +50,7 @@ import approvalRoutes, { startApprovalSweeper } from "./routes/approvals.ts";
 import setupRoutes from "./routes/setup.ts";
 import feedbackRoutes from "./routes/feedback.ts";
 import { startPreferenceScheduler } from "./lib/preference-learner.ts";
+import { pruneStale as prunePresenceStale } from "./lib/presence.ts";
 import { startAutoSummarizeScheduler } from "./lib/auto-summarize.ts";
 import { startAuditRetention } from "./lib/audit-retention.ts";
 import { startCacheRetention } from "./lib/cache-retention.ts";
@@ -103,12 +104,28 @@ app.use("*", securityHeaders);
 // Skip the Origin guard on unauthenticated / public endpoints so
 // curl/Postman/server-to-server callers can still hit them. The SPA
 // still sets Origin, so this only affects non-browser clients.
+// Endpoints that authenticate by their own mechanism (Slack HMAC,
+// webhook bearer secret, CSP reports) are listed here because the
+// browser-side Origin header is absent on their server-to-server /
+// report-only calls — the Origin guard would otherwise block them
+// before their own verification ever runs.
+const ORIGIN_GUARD_SKIP = new Set([
+  "/api/login",
+  "/api/bootstrap-status",
+  "/api/setup/complete",
+  "/api/slack/events",
+  "/api/csp-report",
+  "/api/csp-report/",
+]);
+// Public receiver for user-defined inbound webhooks: /api/webhooks/:watch_id
+// (bearer-secret auth, never a browser). Matching by prefix keeps the
+// :watch_id segment out of the list.
+const ORIGIN_GUARD_SKIP_PREFIXES = ["/api/webhooks/"];
 app.use("/api/*", async (c, next) => {
   const p = c.req.path;
   if (
-    p === "/api/login" ||
-    p === "/api/bootstrap-status" ||
-    p === "/api/setup/complete"
+    ORIGIN_GUARD_SKIP.has(p) ||
+    ORIGIN_GUARD_SKIP_PREFIXES.some((prefix) => p.startsWith(prefix))
   ) {
     return next();
   }
@@ -377,9 +394,31 @@ app.notFound((c) => {
 });
 
 app.onError((err, c) => {
-  console.error("unhandled error:", err);
+  rawConsole.error("unhandled error:", err);
   return c.json({ error: "internal_error" }, 500);
 });
+
+// Phase 8: per-IP rate limit on login (the spammiest endpoint). Also a
+// per-username login limit so a botnet of 1000 IPs can still only hit one
+// user at a small bucket.
+//
+// IMPORTANT: these MUST be registered BEFORE the routers they guard.
+// Hono runs matching middleware/handlers in registration order, so a
+// limiter added after `app.route(...)` never runs — the route handler
+// terminates the chain first. (This block previously sat at the bottom of
+// the file, which silently disabled it.)
+//
+// Note: the per-USER limiters (chat, sandbox exec) live inside their own
+// routers, immediately after `requireAuth`. A user-scoped limiter mounted
+// here would run before auth populated `c.get("user")` and would no-op.
+app.use(
+  "/api/login",
+  rateLimit({ limit: 30, windowMs: 60_000, scope: "ip" }),
+);
+app.use(
+  "/api/login",
+  rateLimitByBody({ limit: 5, windowMs: 60_000, bodyKey: "username", prefix: "login-u", scope: "login-username" }),
+);
 
 // Health / observability
 app.route("/api/health", healthRoutes);
@@ -531,6 +570,7 @@ app.route("/api", authRoutes);
 // the auth middleware in its chain — leading to `c.get("user")`
 // returning undefined and 500s on every authenticated endpoint.
 import { buildOpenAPIDocsApp } from "./routes/openapi-mount.ts";
+import { rawConsole } from "./lib/log.ts";
 app.route("/api/_docs", buildOpenAPIDocsApp());
 
 // Tier 6 — self-improvement: feedback CRUD + profile + stats.
@@ -541,28 +581,6 @@ app.route("/api/marketplace", marketplaceRoutes);
 app.route("/api/kg", knowledgeGraphRoutes);
 app.route("/api/notifications", notificationRouter);
 app.route("/api/notification-preferences", preferencesRouter);
-
-// Phase 8: per-IP rate limit on login + chat (the spammiest endpoints).
-// Also per-username login limit so a botnet of 1000 IPs can still only
-// hit one user at a small bucket.
-app.use(
-  "/api/login",
-  rateLimit({ limit: 30, windowMs: 60_000, scope: "ip" }),
-);
-app.use(
-  "/api/login",
-  rateLimitByBody({ limit: 5, windowMs: 60_000, bodyKey: "username", prefix: "login-u", scope: "login-username" }),
-);
-app.use(
-  "/api/chat",
-  rateLimit({ limit: 120, windowMs: 60_000, scope: "user" }),
-);
-// Sandbox exec is the second most abusable endpoint — bound each user
-// to ~60 commands / minute.
-app.use(
-  "/api/sandbox/sessions/:id/exec",
-  rateLimit({ limit: 60, windowMs: 60_000, scope: "user" }),
-);
 
 // Boot the server: run migrations, then bootstrap the first admin, then
 // start accepting HTTP + WebSocket connections.
@@ -592,8 +610,16 @@ async function main(): Promise<void> {
   startAutoSummarizeScheduler();
   startAuditRetention();
   startCacheRetention();
+  // Tier 1 co-pilot: background sweeper drops stale presence rows so
+  // the panel UI doesn't show ghost users who left hours ago. Runs
+  // every 60s — cheap because it only touches expired rows.
+  setInterval(() => {
+    prunePresenceStale().catch((err) => {
+      rawConsole.warn("[presence-sweeper] prune failed:", (err as Error).message);
+    });
+  }, 60_000);
 
-  const server = Bun.serve<{ panelId: string; userId: string; name: string }>({
+  const server = Bun.serve<PanelSocketData>({
     port: config.api.port,
     // Chat streams can be long (web search + LLM thinking + slow
     // first-token). Default idleTimeout is 10s and would cut them
@@ -619,12 +645,12 @@ async function main(): Promise<void> {
       message: panelWS.message,
     },
   });
-  console.log(`✓ helm api listening on http://localhost:${server.port}`);
-  console.log(`  web origin allowed: ${config.web.origin}`);
+  rawConsole.log(`✓ helm api listening on http://localhost:${server.port}`);
+  rawConsole.log(`  web origin allowed: ${config.web.origin}`);
 }
 
 main().catch((err) => {
-  console.error("✗ fatal during boot:", err);
+  rawConsole.error("✗ fatal during boot:", err);
   process.exit(1);
 });
 

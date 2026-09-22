@@ -4,6 +4,7 @@
 // never throw — auditing is best-effort and must not break the request.
 
 import { sql } from "../db/client.ts";
+import { rawConsole } from "../lib/log.ts";
 
 export interface AuditInput {
   userId: string | null;
@@ -21,6 +22,6 @@ export async function logAudit(input: AuditInput): Promise<void> {
               ${input.tokens ?? 0}, ${sql.json(input.metadata ?? {})})
     `;
   } catch (err) {
-    console.warn("audit log failed:", (err as Error).message);
+    rawConsole.warn("audit log failed:", (err as Error).message);
   }
 }

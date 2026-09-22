@@ -4,7 +4,7 @@
 //   - Logs tab (admin): step-up gated activity + sessions
 // We use the same mono-caps sub-nav pattern as Workspace.
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { useTheme } from "../theme/ThemeProvider";
 import { apiGet, apiPost, apiDelete, apiPatch, apiPut } from "../api/client";
@@ -14,16 +14,10 @@ import { Input } from "../components/ui/Input";
 import { CallSign } from "../components/ui/CallSign";
 import { Avatar } from "../components/ui/Avatar";
 import { EmptyState } from "../components/ui/feedback/EmptyState";
-import { Skeleton } from "../components/ui/feedback/Skeleton";
 import {
   XIcon,
   ClockIcon,
-  ActivityIcon,
   ZapIcon,
-  KeyIcon,
-  SearchIcon,
-  RefreshIcon,
-  UserIcon,
   ThumbsUpIcon,
   ThumbsDownIcon,
 } from "../components/ui/Icon";
@@ -263,7 +257,7 @@ function UsersTab() {
   const [budgetLimit, setBudgetLimit] = useState("");
   const [budgetPeriod, setBudgetPeriod] = useState<"day" | "week" | "month">("month");
 
-  async function loadGovernance() {
+  const loadGovernance = useCallback(async () => {
     const qEntries = await Promise.all(
       list.map(async (u) => {
         try {
@@ -290,10 +284,10 @@ function UsersTab() {
       }),
     );
     setBudgets(Object.fromEntries(bEntries));
-  }
+  }, [list]);
   useEffect(() => {
     if (list.length > 0) loadGovernance();
-  }, [list.length]);
+  }, [list, loadGovernance]);
 
   async function create() {
     setError(null);
@@ -682,7 +676,7 @@ function LogsTab() {
     }
   }
 
-  async function load() {
+  const load = useCallback(async () => {
     const limit = tab === "activity" ? PAGE_SIZE_ACTIVITY : PAGE_SIZE_SESSIONS;
     if (tab === "activity") {
       const qs = new URLSearchParams({
@@ -700,11 +694,11 @@ function LogsTab() {
       const data = await apiGet<SessionResponse>(`/logs/sessions?${qs}`);
       setSessions(data);
     }
-  }
+  }, [tab, offset, actionFilter]);
 
   useEffect(() => {
     if (stepUp) load();
-  }, [stepUp, tab, actionFilter, offset]);
+  }, [stepUp, load]);
 
   if (!stepUp) {
     return (
@@ -1102,29 +1096,6 @@ function Td({ children, align = "left" }: { children: React.ReactNode; align?: "
   );
 }
 
-function Metadata({ meta }: { meta: Record<string, unknown> }) {
-  const entries = Object.entries(meta ?? {});
-  if (entries.length === 0) return <span className="text-textFaint">—</span>;
-  return (
-    <details className="text-[11px]">
-      <summary className="mono-caps text-textMuted cursor-pointer hover:text-text">
-        {entries.length} field{entries.length === 1 ? "" : "s"}
-      </summary>
-      <div className="mt-1 bg-panelAlt border border-borderSoft p-2 font-mono text-textMuted">
-        {entries.map(([k, v]) => (
-          <div key={k}>
-            <span className="text-brass">{k}</span>
-            <span className="text-textMuted"> = </span>
-            <span className="text-text">
-              {typeof v === "string" ? `"${v}"` : JSON.stringify(v)}
-            </span>
-          </div>
-        ))}
-      </div>
-    </details>
-  );
-}
-
 // ─── Tier 6 — Preferences panel ────────────────────────────────────────────
 //
 // Shows the user's learned preferences (preferred models + disliked
@@ -1385,13 +1356,13 @@ function WebSearchAdminTab() {
   const [status, setStatus] = useState<{ providers: Array<{ service: string; connected: boolean }> } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const reload = () => {
+  const reload = useCallback(() => {
     apiGet<{ keys: WebSearchKey[] }>("/web-search/config").then((d) => setKeys(d.keys));
     apiGet<typeof status>("/web-search/status").then(setStatus).catch(() => {});
-  };
+  }, []);
   useEffect(() => {
     reload();
-  }, []);
+  }, [reload]);
 
   async function save() {
     setError(null);
@@ -1400,7 +1371,7 @@ function WebSearchAdminTab() {
       const body: { api_key?: string; base_url?: string } = {};
       if (selected === "lightpanda") body.base_url = baseUrl.trim();
       else if (selected !== "duckduckgo") body.api_key = apiKey.trim();
-      const res = await apiPut<{ ok: boolean }>(
+      await apiPut<{ ok: boolean }>(
         `/web-search/config/${selected}`,
         body,
       );

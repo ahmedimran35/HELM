@@ -22,6 +22,7 @@
 
 import {
   useEffect,
+  useCallback,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -196,12 +197,12 @@ export function Canvas(props: CanvasProps) {
     return map;
   }, [pollRun]);
 
-  function svgPoint(clientX: number, clientY: number): { x: number; y: number } {
+  const svgPoint = useCallback((clientX: number, clientY: number): { x: number; y: number } => {
     const svg = svgRef.current;
     if (!svg) return { x: 0, y: 0 };
     const rect = svg.getBoundingClientRect();
     return screenToWorld(clientX, clientY, rect, view);
-  }
+  }, [view]);
 
   function onCanvasMouseDown(evt: React.MouseEvent) {
     if (evt.target === svgRef.current) {
@@ -345,13 +346,15 @@ export function Canvas(props: CanvasProps) {
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
     const onLeave = () => onCursorMove(null);
-    containerRef.current?.addEventListener("mouseleave", onLeave);
+    // Capture the node now: the ref may point elsewhere by cleanup time.
+    const container = containerRef.current;
+    container?.addEventListener("mouseleave", onLeave);
     return () => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
-      containerRef.current?.removeEventListener("mouseleave", onLeave);
+      container?.removeEventListener("mouseleave", onLeave);
     };
-  }, [snapToGrid, onAddEdge, onUpdateGraph, onCursorMove]);
+  }, [snapToGrid, onAddEdge, onUpdateGraph, onCursorMove, svgPoint]);
 
   function onWheel(evt: React.WheelEvent) {
     if (!evt.ctrlKey && !evt.metaKey) return;

@@ -15,6 +15,7 @@
 
 import { sql } from "../db/client.ts";
 import { logAudit } from "./audit.ts";
+import { rawConsole } from "../lib/log.ts";
 
 export type SpendPeriod = "day" | "week" | "month";
 
@@ -332,7 +333,7 @@ export async function recordSpend(
     `;
   } catch (err) {
     // Non-fatal — the next evaluateCap() will recompute anyway.
-    console.warn("[spend-tracker] spent_cents re-sync failed:", (err as Error).message);
+    rawConsole.warn("[spend-tracker] spent_cents re-sync failed:", (err as Error).message);
   }
 
   // Check the cap and possibly fire a warn notification.
@@ -365,7 +366,7 @@ export async function recordSpend(
       metadata: { period, ratio, spent_cents: snap.spent_cents, limit_cents: snap.limit_cents },
     });
   } catch (err) {
-    console.warn("[spend-tracker] warn notify failed:", (err as Error).message);
+    rawConsole.warn("[spend-tracker] warn notify failed:", (err as Error).message);
   }
 }
 

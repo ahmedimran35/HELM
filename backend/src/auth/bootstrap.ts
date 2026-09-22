@@ -10,6 +10,7 @@
 import { sql } from "../db/client.ts";
 import { hashPassword } from "./password.ts";
 import { config } from "../config.ts";
+import { rawConsole } from "../lib/log.ts";
 
 export async function runBootstrap(): Promise<{ seeded: boolean; adminId: string | null }> {
   const result = await sql.begin(async (tx) => {
@@ -77,10 +78,10 @@ export async function runBootstrap(): Promise<{ seeded: boolean; adminId: string
   });
 
   if (result.seeded) {
-    console.log(`✓ bootstrap: seeded first admin "${config.admin.username}" (must_change_password=true)`);
-    console.log("  → log in and change the password immediately");
+    rawConsole.log(`✓ bootstrap: seeded first admin "${config.admin.username}" (must_change_password=true)`);
+    rawConsole.log("  → log in and change the password immediately");
   } else {
-    console.log("✓ bootstrap: users table non-empty, skipping seed");
+    rawConsole.log("✓ bootstrap: users table non-empty, skipping seed");
   }
 
   // Zero-config auto-provisioning: if the binary `lightpanda` is on
@@ -104,7 +105,7 @@ export async function runBootstrap(): Promise<{ seeded: boolean; adminId: string
               base_url = EXCLUDED.base_url,
               connected = TRUE
       `;
-      console.log(
+      rawConsole.log(
         `✓ web search: auto-configured lightpanda → ${config.webSearch.lightpandaBin}`,
       );
     }

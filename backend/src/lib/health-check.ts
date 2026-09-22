@@ -19,6 +19,7 @@
 
 import { listHarnesses, getHarnessByKind } from "../harness/router.ts";
 import { isHarnessKind, type HarnessKind, type ChatChunk, type ChatRequest } from "../harness/types.ts";
+import { rawConsole } from "../lib/log.ts";
 
 export type HarnessStatus = "healthy" | "degraded" | "down" | "unknown";
 
@@ -132,7 +133,7 @@ async function ping(kind: HarnessKind): Promise<HarnessHealth> {
     // field is surfaced back to admins via /api/health/harnesses and
     // could expose internal provider hostnames or API key fragments.
     // Log full details server-side and store a generic marker.
-    console.warn("[health-check] ping failed:", (err as Error).message);
+    rawConsole.warn("[health-check] ping failed:", (err as Error).message);
     const entry: HarnessHealth = {
       kind,
       status: "down",
@@ -169,11 +170,11 @@ export function startHealthScheduler(): void {
   schedulerStarted = true;
   // Run once immediately so the first request sees fresh data.
   void refreshAllHarnesses().catch((err) =>
-    console.warn("[health-check] initial refresh failed:", (err as Error).message),
+    rawConsole.warn("[health-check] initial refresh failed:", (err as Error).message),
   );
   schedulerTimer = setInterval(() => {
     void refreshAllHarnesses().catch((err) =>
-      console.warn("[health-check] periodic refresh failed:", (err as Error).message),
+      rawConsole.warn("[health-check] periodic refresh failed:", (err as Error).message),
     );
   }, HEALTH_REFRESH_INTERVAL_MS);
 }
@@ -224,7 +225,7 @@ export async function* withFailover(
 
   // We attempt one harness per iteration. If the underlying harness
   // throws before producing any token, we fall through to the next.
-  let attempted = new Set<HarnessKind>();
+  const attempted = new Set<HarnessKind>();
   while (current && !attempted.has(current)) {
     attempted.add(current);
     const harness = getHarnessByKind(current);

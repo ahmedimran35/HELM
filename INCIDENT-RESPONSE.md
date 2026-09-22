@@ -142,57 +142,61 @@ during an incident:
 
 ```sql
 -- Everything in the last hour, newest first.
+-- NOTE: the audit_log timestamp column is `created_at` (there is no `ts`),
+-- and audit_log has no ip column — see the sessions query further down.
 SELECT
-  to_char(ts, 'YYYY-MM-DD HH24:MI:SS') AS ts,
+  to_char(created_at, 'YYYY-MM-DD HH24:MI:SS') AS created_at,
   action,
   user_id,
   target,
   metadata
 FROM audit_log
-WHERE ts > now() - interval '1 hour'
-ORDER BY ts DESC
+WHERE created_at > now() - interval '1 hour'
+ORDER BY created_at DESC
 LIMIT 1000;
 
 -- Per-user breakdown in the last hour.
 SELECT user_id, count(*), array_agg(distinct action) AS actions
 FROM audit_log
-WHERE ts > now() - interval '1 hour'
+WHERE created_at > now() - interval '1 hour'
 GROUP BY user_id
 ORDER BY count(*) DESC
 LIMIT 50;
 
 -- All session logins in the last hour (successful and failed).
 SELECT
-  to_char(ts, 'YYYY-MM-DD HH24:MI:SS') AS ts,
+  to_char(created_at, 'YYYY-MM-DD HH24:MI:SS') AS created_at,
   user_id,
   target,
   action,
   metadata
 FROM audit_log
-WHERE ts > now() - interval '1 hour'
+WHERE created_at > now() - interval '1 hour'
   AND action IN ('login_success', 'login_failed', 'login_blocked_locked')
-ORDER BY ts DESC;
+ORDER BY created_at DESC;
 
 -- All security events routed through fireAlert in the last hour
--- (if you also log to a structured channel). Grep on stdout:
---   level=security_event AND ts > "1 hour ago"
+-- (if you also log to a structured channel). Grep on stdout for
+--   level=security_event
+-- within the last hour.
 ```
 
 For deeper forensics:
 
 ```sql
 -- Every action a single user took in the last 24 hours.
-SELECT ts, action, target, metadata
+SELECT created_at, action, target, metadata
 FROM audit_log
 WHERE user_id = '<uuid>'::uuid
-  AND ts > now() - interval '24 hours'
-ORDER BY ts;
+  AND created_at > now() - interval '24 hours'
+ORDER BY created_at;
 
 -- IP overlap: did anyone else use the same IP recently?
-SELECT user_id, count(*) AS hits, min(ts) AS first, max(ts) AS last
-FROM audit_log
+-- audit_log has no ip column, so this reads the sessions table instead.
+SELECT user_id, count(*) AS hits, min(login_at) AS first, max(login_at) AS last
+FROM sessions
 WHERE ip = '<suspect_ip>'
-  AND ts > now() - interval '7 days'
+  AND login_at > now() - interval '7 days'
 GROUP BY user_id
 ORDER BY hits DESC;
 ```

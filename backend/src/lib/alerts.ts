@@ -1,3 +1,4 @@
+import { rawConsole } from "../lib/log.ts";
 // Real-time alerting via Slack-compatible incoming webhooks.
 //
 // Configure via env:
@@ -49,11 +50,11 @@ export function fireAlert(payload: AlertPayload): void {
       });
       clearTimeout(timer);
       if (!res.ok) {
-        console.warn(`[alerts] webhook returned ${res.status}`);
+        rawConsole.warn(`[alerts] webhook returned ${res.status}`);
       }
     } catch (err) {
       // Don't let an alert-receiver outage cascade into the request path.
-      console.warn(`[alerts] webhook failed: ${(err as Error).message}`);
+      rawConsole.warn(`[alerts] webhook failed: ${(err as Error).message}`);
     }
   })();
 }

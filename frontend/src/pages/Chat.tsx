@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { apiGet, apiPost } from "../api/client";
-import { openapi, type Model, type ChatMessage } from "../api/openapi";
+import { openapi, type Model } from "../api/openapi";
 import { listHarnesses, type HarnessInfo, type HarnessKind } from "../api/harness";
 import { Button } from "../components/ui/Button";
 import { TypingDots } from "../components/ui/TypingDots";
@@ -144,10 +144,10 @@ export function ChatPage() {
       .then((h) => {
         setHarnesses(h);
         // If a previously-selected harness disappeared, fall back to
-        // openai so we always have a valid kind to send.
-        if (!h.find((row) => row.kind === harness)) {
-          setHarness("openai");
-        }
+        // openai so we always have a valid kind to send. Reading the
+        // current value through the updater (instead of closing over
+        // `harness`) keeps this effect a genuine one-shot fetch.
+        setHarness((cur) => (h.find((row) => row.kind === cur) ? cur : "openai"));
       })
       .catch(() => {
         // Silent: keep the default 'openai' selection if the call fails.
@@ -347,6 +347,7 @@ export function ChatPage() {
       let buf = "";
       let lastSearchMeta: SearchMeta | null = null;
       let tokens = 0;
+      // eslint-disable-next-line no-constant-condition
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -389,13 +390,25 @@ export function ChatPage() {
                 tokens = ev.prompt_tokens + (ev.completion_tokens ?? tokens);
               }
               if (ev.delta !== undefined && ev.delta !== null) {
+                // `replaced_length` is sent by the server when it strips
+                // the model's own Sources block before appending the
+                // canonical one: drop that many trailing chars, then
+                // append the delta. See backend lib/chat/sources-injection.ts.
+                const replaced =
+                  typeof ev.replaced_length === "number" && ev.replaced_length > 0
+                    ? ev.replaced_length
+                    : 0;
                 setMessages((prev) => {
                   const next = prev.slice();
                   const last = next[next.length - 1];
                   if (last && last.role === "assistant") {
+                    const base =
+                      replaced > 0
+                        ? last.content.slice(0, Math.max(0, last.content.length - replaced))
+                        : last.content;
                     next[next.length - 1] = {
                       ...last,
-                      content: last.content + ev.delta,
+                      content: base + ev.delta,
                       tokens,
                       latency_ms: Date.now() - sendStartRef.current,
                       search: lastSearchMeta ?? last.search,

@@ -48,18 +48,29 @@ Use the provider's edge rules. Pin a header (`X-Sec-Block: 1`) so
 you can later tell which requests were blocked vs which were
 genuine 429s.
 
-## 3. Block at the application layer (if no proxy)
+## 3. Block at the application layer (no proxy)
 
-If you're running without a proxy in front, the api's per-IP rate
-limit can be tightened temporarily:
+There is **no built-in IP deny-list**, and nothing reads a config file
+— the api's rate limits are per-route constants passed at mount time
+in `backend/src/middleware/ratelimit.ts`. Writing a JSON deny list has
+no effect.
 
-```bash
-# Drop the limit for the offending IP to 0 by abusing the existing
-# rate-limit middleware. Edit backend/src/middleware/ratelimit.ts
-# to add an emergency allow/deny list (gitignored), then redeploy.
-echo '["1.2.3.4"]' > backend/config/ratelimit-deny.json
-docker compose restart api
-```
+Options, in order of preference:
+
+1. Put a proxy or WAF in front (preferred — see §2).
+2. Loosen or tighten the login lockout via env, then redeploy:
+   - `HELM_LOGIN_LOCKOUT_THRESHOLD` (default `5` failed attempts)
+   - `HELM_LOGIN_LOCKOUT_MINUTES` (default `15`)
+
+   This covers failed-login lockout only; it does not cap general
+   request rate.
+3. As a last resort, edit the per-route `limit`/`windowMs` in the
+   middleware and redeploy. That is a code change, not a config toggle.
+
+Client-IP caveat: the limiter trusts `X-Forwarded-For` only when
+`HELM_TRUSTED_PROXY=1`; otherwise it expects the edge to set
+`cf-connecting-ip` or `x-real-ip`. Blocking at the wrong layer means
+blocking the wrong IP.
 
 ## 4. Communicate
 
@@ -69,8 +80,8 @@ rate-limiting one endpoint while we investigate a security report".
 ## 5. After-action
 
 1. Capture the logs you snapshotted in §1 into the incident channel.
-2. Add the offending IP / user-agent to the permanent deny list
-   in `backend/config/ratelimit-deny.json` (or the WAF config).
+2. Add the offending IP / user-agent to your **edge** WAF rules.
+   There is no in-app deny list to update (see §3).
 3. Open a ticket for the actual fix — this runbook is mitigation,
    not resolution.
 4. Link the post-mortem from `incident-response.md`.

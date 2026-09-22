@@ -27,6 +27,7 @@ import { BUNDLES_ROOT, transformAppHtml } from "./apps-bundles.ts";
 import { join } from "node:path";
 import { mkdir, rm } from "node:fs/promises";
 import { safeError } from "../lib/safe-error.ts";
+import { rawConsole } from "../lib/log.ts";
 
 const router = new Hono();
 router.use("*", requireAuth);
@@ -377,7 +378,7 @@ router.post("/generate", requireAdmin, async (c) => {
       if (chunk.done) break;
     }
   } catch (err) {
-    console.warn("[apps.generate] harness.chat failed:", (err as Error).message);
+    rawConsole.warn("[apps.generate] harness.chat failed:", (err as Error).message);
     return safeError(c, err, { status: 502, code: "model_error", publicMessage: "Model error" });
   }
 
@@ -478,7 +479,7 @@ router.post("/", requireAdmin, async (c) => {
     } catch (err) {
       // Non-fatal — the app is created in the DB; the admin can still
       // upload a real bundle later. Log and continue.
-      console.warn(`[apps.create] bundle write failed for ${slug}:`, (err as Error).message);
+      rawConsole.warn(`[apps.create] bundle write failed for ${slug}:`, (err as Error).message);
     }
   }
 
@@ -654,7 +655,7 @@ router.delete("/:id", requireAdmin, async (c) => {
       try {
         await rm(dir, { recursive: true, force: true });
       } catch (err) {
-        console.warn(`[apps.delete] bundle cleanup failed for ${dir}:`, (err as Error).message);
+        rawConsole.warn(`[apps.delete] bundle cleanup failed for ${dir}:`, (err as Error).message);
       }
     }
   }

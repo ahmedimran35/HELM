@@ -13,14 +13,11 @@
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
-  useRef,
   useState,
-  type ReactNode,
 } from "react";
 import { useNavigate } from "react-router-dom";
-import { apiGet, apiPost, apiPatch, apiDelete } from "../api/client";
+import { apiGet, apiPost, apiDelete } from "../api/client";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Badge } from "../components/ui/Badge";
@@ -30,7 +27,6 @@ import { SideSheet } from "../components/ui/layout/SideSheet";
 import {
   PlusIcon,
   PlayIcon,
-  SaveIcon,
   TrashIcon,
   XIcon,
   LightningIcon,
@@ -131,10 +127,6 @@ interface WorkflowTemplate {
 
 const NODE_W = 260;
 const NODE_H = 96;
-const PORT_R = 6;
-const CANVAS_W = 3000;
-const CANVAS_H = 2000;
-const GRID = 24;
 
 interface NodeKindMeta {
   label: string;
@@ -196,25 +188,10 @@ const NODE_KIND_META: Record<NodeKind, NodeKindMeta> = {
   },
 };
 
-const PREDICATE_OPS: { value: PredicateOp; label: string }[] = [
-  { value: "eq", label: "==" },
-  { value: "neq", label: "!=" },
-  { value: "gt", label: ">" },
-  { value: "lt", label: "<" },
-  { value: "contains", label: "contains" },
-  { value: "exists", label: "exists" },
-];
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function nid(): string {
-  return "n" + Math.random().toString(36).slice(2, 9);
-}
-function eid(): string {
-  return "e" + Math.random().toString(36).slice(2, 9);
-}
 
 function nodeBounds(node: WorkflowNode): { w: number; h: number } {
   if (NODE_KIND_META[node.kind].shape === "diamond") {
@@ -606,16 +583,6 @@ function RunStatusDot({ status }: { status: WorkflowRun["status"] }) {
   return <div className={cn("w-2 h-2 rounded-full flex-shrink-0", color)} />;
 }
 
-function NodeLogDot({ status }: { status: "ok" | "error" | "skipped" }) {
-  const color =
-    status === "ok"
-      ? "bg-teal"
-      : status === "error"
-      ? "bg-rust"
-      : "bg-textFaint";
-  return <div className={cn("w-2 h-2 rounded-full flex-shrink-0", color)} />;
-}
-
 // ---------------------------------------------------------------------------
 // Workflow card (list view tile) with mini-canvas preview
 // ---------------------------------------------------------------------------
@@ -673,24 +640,6 @@ function WorkflowCard({
       addToast({
         id: `wf-del-err-${Date.now()}`,
         title: "Delete failed",
-        description: (err as Error).message,
-        tone: "warning",
-      });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function toggle(e: React.MouseEvent) {
-    e.stopPropagation();
-    setBusy(true);
-    try {
-      await apiPatch(`/workflows/${w.id}`, { enabled: !w.enabled });
-      onChanged();
-    } catch (err) {
-      addToast({
-        id: `wf-tog-err-${Date.now()}`,
-        title: "Toggle failed",
         description: (err as Error).message,
         tone: "warning",
       });
@@ -919,7 +868,6 @@ function TemplatesSheet({
 // ---------------------------------------------------------------------------
 
 function NewWorkflowForm({
-  templates,
   onCancel,
   onCreated,
 }: {

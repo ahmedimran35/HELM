@@ -32,7 +32,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { XIcon } from "../ui/Icon";
 import { Button } from "../ui/Button";
 import { useToast } from "../ui/feedback/Toast";
-import { safeHref } from "../../lib/safe-href";
 
 interface AppFrameProps {
   /** App slug — matches /apps/:slug/ when the slug aligns with the bundle
@@ -71,21 +70,6 @@ type InboundMessage =
   | { type: "helm:app-data"; id: string; op: "get" | "set" | "del" | "list"; key?: string; value?: unknown }
   | { type: string; [k: string]: unknown };
 
-// Outgoing responses back to the app bundle.
-type OutboundMessage =
-  | { type: "helm:context"; theme: string; install: { id: string } }
-  | { type: "helm:api-response"; id: string; status: number; body: unknown }
-  | { type: "helm:app-data-response"; id: string; status: number; body: unknown };
-
-type IframeMessage =
-  | { type: "helm:ready"; name?: string; version?: string }
-  | { type: "helm:context"; theme?: string; install?: { id: string } }
-  | { type: "helm:install"; install?: { id: string } }
-  | { type: "helm:theme"; theme: string }
-  | { type: "helm:toast"; title?: string; description?: string; tone?: string; duration?: number }
-  | { type: "helm:navigate"; path: string }
-  | { type: string; [k: string]: unknown };
-
 export function AppFrame({ slug, install, appName, bundleUrl, onClose }: AppFrameProps) {
   const { addToast } = useToast();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -117,145 +101,6 @@ export function AppFrame({ slug, install, appName, bundleUrl, onClose }: AppFram
   function isAppDataMessage(msg: InboundMessage): msg is Extract<InboundMessage, { type: "helm:app-data" }> {
     return msg.type === "helm:app-data";
   }
-  useEffect(() => {
-    function onMessage(ev: MessageEvent) {
-      // We only accept messages from the iframe we own.
-      if (ev.source !== iframeRef.current?.contentWindow) return;
-
-      const data = ev.data as InboundMessage | null;
-      if (!data || typeof data !== "object" || typeof data.type !== "string") {
-        return;
-      }
-
-      switch (data.type) {
-        case "helm:ready": {
-          setReady(true);
-          setError(null);
-          // Push fresh context to the iframe.
-          try {
-            const w = iframeRef.current?.contentWindow;
-            if (w) {
-              w.postMessage(
-                {
-                  type: "helm:context",
-                  theme: currentThemeRef.current,
-                  install: { id: install },
-                },
-                "*", // iframe is opaque origin; "*" is the only option
-              );
-            }
-          } catch {
-            /* ignore */
-          }
-          break;
-        }
-        case "helm:toast": {
-          const title = typeof data.title === "string" ? data.title : "";
-          const description =
-            typeof data.description === "string" ? data.description : undefined;
-          const tone: "info" | "success" | "warning" =
-            data.tone === "success" || data.tone === "warning"
-              ? data.tone
-              : "info";
-          addToast({
-            id: `app-${slug}-${install}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            title,
-            description,
-            tone,
-            duration: typeof data.duration === "number" ? data.duration : 4000,
-          });
-          break;
-        }
-        case "helm:navigate": {
-          if (
-            typeof data.path === "string" &&
-            data.path.length > 0 &&
-            data.path.length < 256 &&
-            /^\/[A-Za-z0-9_\-/.?&=]*$/.test(data.path)
-          ) {
-            window.dispatchEvent(
-              new CustomEvent("helm:app-navigate", { detail: { path: data.path, slug } }),
-            );
-          }
-          break;
-        }
-        default: {
-          if (isApiMessage(data)) {
-            handleApiRequest(data);
-          } else if (isAppDataMessage(data)) {
-            handleAppDataRequest(data);
-          }
-          // "helm:context", "helm:install", "helm:theme" are informational; ignore.
-          break;
-        }
-      }
-    }
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [slug, install, addToast]);
-
-  // If the iframe doesn't signal "ready" within a reasonable timeout,
-  // surface an error so the user isn't staring at a spinner forever.
-  useEffect(() => {
-    if (ready) return;
-    const t = setTimeout(() => {
-      setError((cur) => cur ?? "App did not finish loading. Check the bundle URL or the server logs.");
-    }, 12_000);
-    return () => clearTimeout(t);
-  }, [ready, mountedKey]);
-
-  // Push our current theme down to the iframe on load. We use a ref so
-  // the message handler can read the latest value without re-binding.
-  const currentThemeRef = useRef<string>("dark");
-  useEffect(() => {
-    const dt = document.documentElement.getAttribute("data-theme");
-    if (dt === "light" || dt === "dark") currentThemeRef.current = dt;
-    function onTheme(ev: Event) {
-      const next = (ev as CustomEvent<{ theme: string }>).detail?.theme;
-      if (next === "light" || next === "dark") {
-        currentThemeRef.current = next;
-        try {
-          const w = iframeRef.current?.contentWindow;
-          if (w) {
-            // Use the iframe's exact origin, not "*". The iframe origin
-            // matches the host's by construction (we set `src` ourselves)
-            // and the explicit value is what the postMessage spec
-            // requires — "*" would let a swapped iframe forward our
-            // context to an unexpected origin.
-            const iframeOrigin = w.location.origin || window.location.origin;
-            w.postMessage(
-              { type: "helm:context", theme: next, install: { id: install } },
-              iframeOrigin,
-            );
-          }
-        } catch {
-          /* ignore */
-        }
-      }
-    }
-    window.addEventListener("helm:theme", onTheme as EventListener);
-    return () => window.removeEventListener("helm:theme", onTheme as EventListener);
-  }, [install, mountedKey]);
-
-  // When the iframe loads, push our context.
-  const handleIframeLoad = useCallback(() => {
-    try {
-      const w = iframeRef.current?.contentWindow;
-      if (w) {
-        w.postMessage(
-          {
-            type: "helm:context",
-            theme: currentThemeRef.current,
-            install: { id: install },
-          },
-          "*",
-        );
-      }
-    } catch {
-      /* ignore */
-    }
-  }, [install]);
-
   // Proxy an authenticated /api/* request from the sandboxed app.
   const handleApiRequest = useCallback(
     async (msg: Extract<InboundMessage, { type: "helm:api" }>) => {
@@ -352,6 +197,146 @@ export function AppFrame({ slug, install, appName, bundleUrl, onClose }: AppFram
     },
     [install],
   );
+
+  useEffect(() => {
+    function onMessage(ev: MessageEvent) {
+      // We only accept messages from the iframe we own.
+      if (ev.source !== iframeRef.current?.contentWindow) return;
+
+      const data = ev.data as InboundMessage | null;
+      if (!data || typeof data !== "object" || typeof data.type !== "string") {
+        return;
+      }
+
+      switch (data.type) {
+        case "helm:ready": {
+          setReady(true);
+          setError(null);
+          // Push fresh context to the iframe.
+          try {
+            const w = iframeRef.current?.contentWindow;
+            if (w) {
+              w.postMessage(
+                {
+                  type: "helm:context",
+                  theme: currentThemeRef.current,
+                  install: { id: install },
+                },
+                "*", // iframe is opaque origin; "*" is the only option
+              );
+            }
+          } catch {
+            /* ignore */
+          }
+          break;
+        }
+        case "helm:toast": {
+          const title = typeof data.title === "string" ? data.title : "";
+          const description =
+            typeof data.description === "string" ? data.description : undefined;
+          const tone: "info" | "success" | "warning" =
+            data.tone === "success" || data.tone === "warning"
+              ? data.tone
+              : "info";
+          addToast({
+            id: `app-${slug}-${install}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            title,
+            description,
+            tone,
+            duration: typeof data.duration === "number" ? data.duration : 4000,
+          });
+          break;
+        }
+        case "helm:navigate": {
+          if (
+            typeof data.path === "string" &&
+            data.path.length > 0 &&
+            data.path.length < 256 &&
+            /^\/[A-Za-z0-9_\-/.?&=]*$/.test(data.path)
+          ) {
+            window.dispatchEvent(
+              new CustomEvent("helm:app-navigate", { detail: { path: data.path, slug } }),
+            );
+          }
+          break;
+        }
+        default: {
+          if (isApiMessage(data)) {
+            handleApiRequest(data);
+          } else if (isAppDataMessage(data)) {
+            handleAppDataRequest(data);
+          }
+          // "helm:context", "helm:install", "helm:theme" are informational; ignore.
+          break;
+        }
+      }
+    }
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [slug, install, addToast, handleApiRequest, handleAppDataRequest]);
+
+  // If the iframe doesn't signal "ready" within a reasonable timeout,
+  // surface an error so the user isn't staring at a spinner forever.
+  useEffect(() => {
+    if (ready) return;
+    const t = setTimeout(() => {
+      setError((cur) => cur ?? "App did not finish loading. Check the bundle URL or the server logs.");
+    }, 12_000);
+    return () => clearTimeout(t);
+  }, [ready, mountedKey]);
+
+  // Push our current theme down to the iframe on load. We use a ref so
+  // the message handler can read the latest value without re-binding.
+  const currentThemeRef = useRef<string>("dark");
+  useEffect(() => {
+    const dt = document.documentElement.getAttribute("data-theme");
+    if (dt === "light" || dt === "dark") currentThemeRef.current = dt;
+    function onTheme(ev: Event) {
+      const next = (ev as CustomEvent<{ theme: string }>).detail?.theme;
+      if (next === "light" || next === "dark") {
+        currentThemeRef.current = next;
+        try {
+          const w = iframeRef.current?.contentWindow;
+          if (w) {
+            // Use the iframe's exact origin, not "*". The iframe origin
+            // matches the host's by construction (we set `src` ourselves)
+            // and the explicit value is what the postMessage spec
+            // requires — "*" would let a swapped iframe forward our
+            // context to an unexpected origin.
+            const iframeOrigin = w.location.origin || window.location.origin;
+            w.postMessage(
+              { type: "helm:context", theme: next, install: { id: install } },
+              iframeOrigin,
+            );
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    window.addEventListener("helm:theme", onTheme as EventListener);
+    return () => window.removeEventListener("helm:theme", onTheme as EventListener);
+  }, [install, mountedKey]);
+
+  // When the iframe loads, push our context.
+  const handleIframeLoad = useCallback(() => {
+    try {
+      const w = iframeRef.current?.contentWindow;
+      if (w) {
+        w.postMessage(
+          {
+            type: "helm:context",
+            theme: currentThemeRef.current,
+            install: { id: install },
+          },
+          "*",
+        );
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [install]);
+
 
   function postResponse(id: string, status: number, body: unknown) {
     try {

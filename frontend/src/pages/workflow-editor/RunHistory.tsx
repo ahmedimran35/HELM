@@ -71,12 +71,16 @@ export function RunHistory({ open, onClose, workflow, models }: Props) {
 
   // Most recent first.
   const runs = (workflow.runs ?? []).slice().reverse();
+  // Key the reset effect on the newest run's id rather than the `runs`
+  // array itself — `runs` is rebuilt on every render, so depending on it
+  // would re-run the effect (and reset the expanded panel) every render.
+  const newestRunId = runs[0]?.id ?? null;
 
-  const [expanded, setExpanded] = useState<string | null>(runs[0]?.id ?? null);
+  const [expanded, setExpanded] = useState<string | null>(newestRunId);
   // Reset the expanded panel to the most-recent run each time the sheet opens.
   useEffect(() => {
-    if (open && runs[0]) setExpanded(runs[0].id);
-  }, [open, runs[0]?.id]);
+    if (open && newestRunId) setExpanded(newestRunId);
+  }, [open, newestRunId]);
 
   return (
     <SideSheet

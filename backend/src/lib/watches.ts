@@ -25,6 +25,7 @@ import { logAudit } from "./audit.ts";
 import { computeNextRun } from "./cron.ts";
 import { getProviderById, buildAdapter } from "../providers/registry.ts";
 import { assertSafeOutboundUrl, safeFetch } from "./safe-fetch.ts";
+import { rawConsole } from "../lib/log.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -85,7 +86,7 @@ export function startWatchScheduler(): void {
   // offline). Subsequent ticks keep the cadence honest.
   void tick();
   schedulerHandle = setInterval(() => void tick(), TICK_MS);
-  console.log("✓ watch scheduler started (tick =", TICK_MS, "ms)");
+  rawConsole.log("✓ watch scheduler started (tick =", TICK_MS, "ms)");
 }
 
 export function stopWatchScheduler(): void {
@@ -128,7 +129,7 @@ async function tick(): Promise<void> {
       }
     }
   } catch (err) {
-    console.warn("watch scheduler tick failed:", (err as Error).message);
+    rawConsole.warn("watch scheduler tick failed:", (err as Error).message);
   } finally {
     schedulerRunning = false;
   }
@@ -178,7 +179,7 @@ export async function runWatch(
   // as the run row is committed. The background path updates the row
   // when it finishes.
   void executeAction(watch, runId, opts).catch((err) => {
-    console.warn("watch action failed:", (err as Error).message);
+    rawConsole.warn("watch action failed:", (err as Error).message);
   });
   return { run_id: runId, status: "ok" };
 }
@@ -209,7 +210,7 @@ async function executeAction(
     // is exposed back to the watch owner via the /api/watches/:id/runs
     // endpoint. Log the full details server-side and store a generic
     // marker instead.
-    console.warn("[watches] executeAction failed:", (err as Error).message);
+    rawConsole.warn("[watches] executeAction failed:", (err as Error).message);
     message = "watch_action_failed";
   }
   await sql`
@@ -496,7 +497,7 @@ export async function evaluateTriggers(
       `;
       fired++;
     } catch (err) {
-      console.warn("[watches] trigger dispatch failed:", (err as Error).message);
+      rawConsole.warn("[watches] trigger dispatch failed:", (err as Error).message);
       await sql`
         UPDATE watch_runs
         SET finished_at = now(), status = 'error', message = 'trigger_action_failed'

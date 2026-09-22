@@ -19,6 +19,7 @@
 
 import type { SSEStreamingApi } from "hono/streaming";
 import type { Harness, HarnessMessage } from "../../harness/types.ts";
+import { rawConsole } from "../../lib/log.ts";
 
 export interface SourcesOnlyInputs {
   harness: Harness;
@@ -164,7 +165,7 @@ export async function refetchIfSourcesOnly(
     };
   } catch (err) {
     // Fallback failed — keep the original sources-only response.
-    console.warn("[chat] sources-only refetch failed:", (err as Error).message);
+    rawConsole.warn("[chat] sources-only refetch failed:", (err as Error).message);
     return {
       refetched: false,
       assembled: inputs.assembled,

@@ -1,81 +1,81 @@
 # Secrets Rotation Runbook
 
-Secrets are leases, not freeholds. Every secret in HELM has a
-documented rotation path; this runbook is the playbook for executing
-each one. Aim for **zero downtime** on every rotation unless the
-secret is already known-compromised — in which case skip the grace
-period.
+Secrets are leases, not freeholds. This runbook covers every secret
+in HELM and how to rotate it with minimum downtime. The single most
+important fact: **`SESSION_SECRET` does not support a rolling grace
+window** — changing it immediately ends every active session (see §1).
 
 ## 1. SESSION_SECRET
 
-`SESSION_SECRET` signs cookies (HMAC) and seeds the v1 provider-key
-salt (`scryptSync`). Rotating it invalidates every active session
-and (if you don't also rotate `PROVIDER_KEY_SECRET`) breaks the v1
-path for encrypted provider keys.
+`SESSION_SECRET` derives provider-key encryption keys and is available
+to the session layer. Rotating it ends every active session and
+(before a separate provider-key rotation) can also make `v1` provider
+ciphertexts unreadable. Plan for users to re-authenticate.
 
-**HMAC-safe prefix chain:** SESSION_SECRET is concatenated with a
-**versioned prefix** so old cookies remain valid during the rollover
-window:
+**No grace window.** Unlike some systems that keep an old signing key
+around and accept both old and new cookies, HELM stores raw session IDs
+in `sessions` and issues an opaque cookie (`helm_sid` +
+`__Host-helm_sid` when `Secure`) whose value is the session UUID.
+There is no `HMAC(SIGNING_KEY, session_id)` and no `version:signed`
+encoding. There is therefore no dual-key path shaped like:
 
 ```
 SIGNING_KEY_V1 = HMAC_SHA256("v1:" + SESSION_SECRET)
 SIGNING_KEY_V2 = HMAC_SHA256("v2:" + SESSION_SECRET)
 ```
 
-Cookie payload format: `version:signed_value` where `signed_value` is
-`HMAC(SIGNING_KEY_V<n>, session_id)`. On verify we try each version
-in order — newest first. New cookies are issued with the newest
-version; old cookies keep working until they expire naturally.
+**Rotation playbook (only option):**
 
-**Rotation playbook:**
-
-1. Generate a new secret (`openssl rand -hex 64`).
-2. Append it as `SESSION_SECRET_V2` env var (keep the old
-   `SESSION_SECRET` set).
-3. Deploy. The verifier now accepts both v1 (signed with the old)
-   and v2 (signed with the new). All NEW cookies use v2.
-4. Wait the full TTL (7 days by default; see `config.ts`). All
-   v1-signed cookies have expired.
-5. Set `SESSION_SECRET=<new>`, remove `SESSION_SECRET_V2`.
-6. Deploy. v1 path is now signed against a different secret than the
-   one the old cookies were issued under — verify still fails on
-   those, but they're expired anyway.
-
-**To skip the grace period** (forced rotation after compromise):
-
-1. Set `SESSION_SECRET=<new>`.
-2. `UPDATE sessions SET logout_at = now() WHERE logout_at IS NULL;`
-3. Deploy.
-
-## 3. PROVIDER_KEY_SECRET
-
-`PROVIDER_KEY_SECRET` is the dedicated scrypt salt for v2 provider
-ciphertexts. Rotating it requires re-encrypting every row.
-
-**No-downtime playbook:**
-
-1. Generate a new secret.
-2. Set `PROVIDER_KEY_SECRET_V2=<new>` (keep the old
-   `PROVIDER_KEY_SECRET`).
-3. Deploy. `decryptSecret` now reads v2 blobs first, falls back to
-   v1 (still works because both keys are loaded).
-4. Run a one-shot migration:
+1. Generate a new secret (`openssl rand -hex 64`). Treat any
+   `SESSION_SECRET_V1` / `SESSION_SECRET_V2` / `SIGNING_KEY` env you
+   may have seen in an earlier draft of this doc as fictional — there
+   is no such env.
+2. Force-close every session:
    ```sql
-   -- For every row in `providers`, re-encrypt under the new key.
-   -- The migration script lives at scripts/rotate-provider-keys.ts
-   -- and is run with `bun` once.
+   UPDATE sessions SET logout_at = now() WHERE logout_at IS NULL;
    ```
-5. The migration writes new v2 blobs (now signed with the v2 key).
-6. Set `PROVIDER_KEY_SECRET=<new>`, drop the `_V2` suffix.
-7. Deploy. The v1 path is no longer reachable — old v1 blobs (if
-   any survived) become undecryptable.
+3. Set `SESSION_SECRET=<new>` and deploy. Every subsequent request
+   presents a cookie whose session row is already closed and receives
+   a `401`, which is the desired behaviour after a suspected leak.
+4. Verify: `curl -fsS http://localhost:3000/api/login` with the new
+   session secret works; old cookies are rejected.
+5. Optionally rotate provider keys `v1` → `v2` as well (see §2).
 
-Note: with the **AAD context label** in `providers/crypto.ts`, every
-v2 blob is bound to `"helm.provider-secret.v2"`. Rotation doesn't
-need a new AAD label because we only rotate the key, not the
-context.
+## 2. PROVIDER_KEY_SECRET (dedicated key for provider ciphertexts — see `backend/src/providers/crypto.ts`)
 
-## 4. POSTGRES_PASSWORD
+`PROVIDER_KEY_SECRET` is the scrypt salt for `v2` provider
+ciphertexts (see `backend/src/providers/crypto.ts`). The module derives
+exactly two keys at import time:
+
+- `KEY_V1` = scrypt(`SESSION_SECRET`, `"helm-provider-key-salt"`) — legacy rows
+- `KEY_V2` = scrypt(`PROVIDER_KEY_SECRET ?? SESSION_SECRET`, `"helm-provider-key-salt-v2"`) — current rows
+
+There is **no `PROVIDER_KEY_SECRET_V2` and no dual-v2-key rollover** —
+only one `KEY_V2` is ever loaded, and there is no shipped re-encryption
+script. The earlier draft's two-key grace-window playbook is not
+implementable against this code.
+
+**There is no zero-downtime rotation.** Changing
+`PROVIDER_KEY_SECRET` immediately makes every existing `v2:` blob
+undecryptable: the new key cannot read ciphertext written under the old
+one. Two viable paths:
+
+1. **Preferred — rotate the upstream provider keys instead** (see §6).
+   That re-encrypts using the *existing* `PROVIDER_KEY_SECRET` and
+   needs no crypto rotation at all.
+2. **If `PROVIDER_KEY_SECRET` itself must change** (e.g. it leaked):
+   a. Schedule a maintenance window.
+   b. With the API stopped, decrypt each `providers.api_key_encrypted`
+      under the old key and re-encrypt under the new key, using a
+      script you write against `backend/src/providers/crypto.ts`
+      (there is none in-repo).
+   c. Set `PROVIDER_KEY_SECRET=<new>` and start the API.
+   d. Verify each provider with a provider test / chat call.
+
+`v1:` rows remain readable only while `SESSION_SECRET` is unchanged,
+since `KEY_V1` derives from it.
+
+## 3. POSTGRES_PASSWORD
 
 `DATABASE_URL` carries the password. Rotating without downtime:
 
@@ -91,7 +91,7 @@ context.
 If you're on a managed postgres (RDS / Cloud SQL), use the
 provider's rotate-password UI — it does the same dance atomically.
 
-## 5. REDIS_PASSWORD
+## 4. REDIS_PASSWORD
 
 Same shape. `REDIS_URL=redis://:<pw>@host:6379`.
 
@@ -102,7 +102,7 @@ Same shape. `REDIS_URL=redis://:<pw>@host:6379`.
 4. Revoke the old password (`CONFIG SET requirepass ''` is NOT it;
    the proper API is `ACL DELUSER` for ACL-based auth).
 
-## 6. ADMIN_PASSWORD
+## 5. ADMIN_PASSWORD
 
 `config.admin.password` (env `ADMIN_PASSWORD`) is the bootstrap
 password for the first admin. Subsequent admins change theirs via
@@ -116,8 +116,9 @@ password for the first admin. Subsequent admins change theirs via
    ```sql
    UPDATE users SET password_hash = '<new-bcrypt-hash>' WHERE username = '<admin>';
    ```
-   The bcrypt cost is 12 by default (see `auth/password.ts`); use the
-   same cost when rotating so the timing profile stays the same.
+   The bcrypt cost defaults to 10 (`BCRYPT_COST`, clamped 4–15; see
+   `auth/password.ts`); use the same cost when rotating so the timing
+   profile stays the same.
 4. Deploy. The env var is now out of sync with the DB until you
    reset the cluster — that's fine; subsequent bootstraps use the
    DB row, not the env.
@@ -127,7 +128,7 @@ doesn't matter anymore), rotate all admin users via
 `/api/change-password` and set `ADMIN_PASSWORD` to a random
 placeholder. The DB row is the source of truth post-bootstrap.
 
-## 7. Provider API keys (encrypted at rest)
+## 6. Provider API keys (encrypted at rest)
 
 Provider keys live in the `providers` table as v2 ciphertexts. To
 rotate one:

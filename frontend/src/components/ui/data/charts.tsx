@@ -55,6 +55,9 @@ export function Sparkline({
   className,
   area = true,
 }: SparklineProps) {
+  // useId must run unconditionally — the early return below would
+  // otherwise change the hook order once values become non-empty.
+  const id = useId();
   if (values.length === 0) return null;
   // Coerce NaN / Infinity to safe defaults — upstream data can be polluted
   // by partial API failures (e.g. an analytics endpoint returns 401 for one
@@ -62,7 +65,6 @@ export function Sparkline({
   const clean = values.map((v) =>
     Number.isFinite(v) ? v : 0,
   );
-  const id = useId();
   const min = Math.min(...clean);
   const max = Math.max(...clean);
   const range = max - min || 1;

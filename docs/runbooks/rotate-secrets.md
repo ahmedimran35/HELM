@@ -14,12 +14,11 @@ table below is the authoritative inventory for this project.
 
 | Secret                       | Stored in                      | Consumers                                          |
 | ---------------------------- | ------------------------------ | -------------------------------------------------- |
-| `SESSION_SECRET`             | env (`SESSION_SECRET`)         | api — session cookie signing                       |
+| `SESSION_SECRET`             | env (`SESSION_SECRET`)         | api — provider-key `v1` salt + session layer (no cookie signing) |
 | `ADMIN_PASSWORD`             | env (`ADMIN_PASSWORD`)         | api — bootstrap admin (only on first boot)         |
 | `POSTGRES_PASSWORD`          | env + `docker-compose.yml`     | api, postgres                                      |
 | `REDIS_PASSWORD`             | env + `docker-compose.yml`     | api, redis                                         |
-| `WEB_SEARCH_BRAVE_KEY`       | env                            | api — web search provider                          |
-| `WEB_SEARCH_TAVILY_KEY`      | env                            | api — web search provider                          |
+| Web-search keys (Brave/Tavily/…) | encrypted in `web_search_keys` DB table | api — configured via admin API, not env |
 | GitHub PAT / deploy keys     | 1Password + GitHub Secrets     | CI workflows                                       |
 | cosign key (keyful mode)     | 1Password + GitHub Secrets     | `image-sign.yml` (only if KEYFUL is enabled)       |
 
@@ -35,7 +34,8 @@ Rotate in this order. Skipping a step = auth breaks for users.
 2. **REDIS_PASSWORD** (api caches break)
 3. **SESSION_SECRET** (force all sessions to re-auth — expected)
 4. **ADMIN_PASSWORD** (force admin to log in again — expected)
-5. **Provider keys** (Brave / Tavily / OAuth client secrets)
+5. **Provider keys** (LLM + OAuth + web-search — rotate through the
+   admin UI/API; web-search keys live in DB, not env)
 
 ## 3. Procedure (compose-based deployment)
 
@@ -88,9 +88,11 @@ curl -fsS -X POST http://localhost:3000/api/login \
   -H 'Content-Type: application/json' \
   -d "{\"username\":\"${ADMIN_USERNAME}\",\"password\":\"${NEW_ADMIN}\"}"
 
-# Sessions issued under the OLD secret should now fail.
-# (They will; the cookie HMAC won't match. This is the desired
-# behaviour — every user re-authenticates.)
+# Sessions are opaque server-side IDs in the `sessions` table, not
+# signed cookies, so they do NOT re-verify against SESSION_SECRET.
+# Rotating SESSION_SECRET alone leaves existing sessions valid — the
+# revocation step below is what forces re-authentication.
+sql "UPDATE sessions SET logout_at = now() WHERE logout_at IS NULL;"
 
 # Health + audit log should be quiet (no 500s from the rotation).
 curl -fsS http://localhost:3000/api/health

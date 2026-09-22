@@ -7,8 +7,8 @@ import { Hono } from "hono";
 import { sql } from "../db/client.ts";
 import { config } from "../config.ts";
 import { verifyPassword, hashPassword } from "../auth/password.ts";
-import { createSession, revokeSession } from "../auth/session.ts";
-import { requireAuth, serializeSessionCookie, clearSessionCookie, isSecureRequest } from "../middleware/auth.ts";
+import { createSession, revokeSession, loadUserForSession } from "../auth/session.ts";
+import { requireAuth, parseSessionCookie, serializeSessionCookie, clearSessionCookie, isSecureRequest } from "../middleware/auth.ts";
 import { logAudit } from "../lib/audit.ts";
 import { safeError } from "../lib/safe-error.ts";
 import { passwordIsStrong } from "../lib/validate.ts";
@@ -151,16 +151,26 @@ router.post("/login", async (c) => {
   });
 });
 
+// Logout is intentionally NOT behind `requireAuth`. We resolve the session
+// straight from the cookie so that:
+//   1. A valid session IS revoked server-side (the previous version read
+//      `c.get("sessionId")`/`c.get("user")`, which are only populated by
+//      requireAuth — so it never revoked anything and a stolen cookie
+//      stayed valid for the full session TTL after "logout").
+//   2. A stale/expired session still gets its cookie cleared (no 401 dead
+//      end for the client).
 router.post("/logout", async (c) => {
-  const sessionId = c.get("sessionId");
-  const user = c.get("user");
-  if (sessionId) await revokeSession(sessionId);
-  if (user) {
-    await logAudit({
-      userId: user.id,
-      target: "auth",
-      action: "logout",
-    });
+  const sessionId = parseSessionCookie(c.req.header("cookie") ?? "");
+  if (sessionId) {
+    const user = await loadUserForSession(sessionId);
+    await revokeSession(sessionId);
+    if (user) {
+      await logAudit({
+        userId: user.id,
+        target: "auth",
+        action: "logout",
+      });
+    }
   }
   const isHttps = isSecureRequest(c.req.url, (k) => c.req.header(k));
   c.header("Set-Cookie", clearSessionCookie(isHttps), { append: true });

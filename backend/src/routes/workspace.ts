@@ -9,7 +9,7 @@ import { Hono } from "hono";
 import { sql } from "../db/client.ts";
 import { requireAuth } from "../middleware/auth.ts";
 import { logAudit } from "../lib/audit.ts";
-import { sanitizeContentDispositionFilename, UnsafeFilenameError } from "../lib/safe-filename.ts";
+import { sanitizeContentDispositionFilename } from "../lib/safe-filename.ts";
 import { validate, validationErrorResponse } from "../lib/validate.ts";
 import { logSecurityEvent } from "../lib/security-events.ts";
 import { parsePagination, paginatedResponse } from "../lib/pagination.ts";
@@ -230,10 +230,20 @@ router.get("/files/:id/download", async (c) => {
     });
     cdHeader = `attachment; filename="download.bin"`;
   }
+  // Force attachment disposition + nosniff + sandboxed CSP — HTML- and
+  // SVG-rendered browser types uploaded here could otherwise be hosted
+  // same-origin and used to script the session (XSS). Mirrors the
+  // hardening on /api/files/:id/download.
+  const dangerous = /^(text\/html|application\/xhtml|image\/svg|application\/xml)\b/i;
+  const safeType = dangerous.test(r.mime_type ?? "")
+    ? "application/octet-stream"
+    : (r.mime_type || "application/octet-stream");
   return new Response(new Uint8Array(r.bytes), {
     headers: {
-      "Content-Type": r.mime_type || "application/octet-stream",
+      "Content-Type": safeType,
       "Content-Disposition": cdHeader,
+      "Content-Security-Policy": "default-src 'none'; sandbox",
+      "X-Content-Type-Options": "nosniff",
     },
   });
 });

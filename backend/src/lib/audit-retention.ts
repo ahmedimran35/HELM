@@ -4,6 +4,7 @@
 // environments can extend (SOC2 / ISO 27001 typically want 1 year).
 
 import { sql } from "../db/client.ts";
+import { rawConsole } from "../lib/log.ts";
 
 const RETENTION_DAYS = Number(process.env.HELM_AUDIT_RETENTION_DAYS ?? 90);
 let scheduled = false;
@@ -22,14 +23,14 @@ export function startAuditRetention(): void {
         WHERE created_at < now() - (${RETENTION_DAYS}::int * interval '1 day')
       `;
       const n = r[0]?.n ?? 0;
-      if (n > 0) console.log(`[audit-retention] pruned ${n} old rows`);
+      if (n > 0) rawConsole.log(`[audit-retention] pruned ${n} old rows`);
     } catch (err) {
-      console.warn("[audit-retention] prune failed:", (err as Error).message);
+      rawConsole.warn("[audit-retention] prune failed:", (err as Error).message);
     }
   };
   void tick();
   setInterval(tick, Math.max(oneDay, RETENTION_DAYS * oneDay / 12)).unref();
-  console.log(
+  rawConsole.log(
     `[audit-retention] started (retention=${RETENTION_DAYS} days)`,
   );
 }

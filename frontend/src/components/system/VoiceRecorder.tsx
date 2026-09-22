@@ -104,6 +104,40 @@ export function VoiceRecorder({ panelId, onTranscript, onClose, open }: Props) {
     }
   }, []);
 
+  const upload = useCallback(
+    async (blob: Blob) => {
+      setState((s) => ({ ...s, status: "uploading" }));
+      const form = new FormData();
+      const ext = blob.type.includes("mp4") ? "m4a"
+        : blob.type.includes("ogg") ? "ogg"
+        : "webm";
+      form.append("audio", blob, `voice-${Date.now()}.${ext}`);
+      if (panelId) form.append("panel_id", panelId);
+      form.append("duration_ms", String(state.elapsedMs));
+      try {
+        const data = await api<{
+          id: string;
+          transcript: string;
+          duration_ms: number;
+          stub: boolean;
+        }>("/voice", {
+          method: "POST",
+          body: form,
+        });
+        setState((s) => ({
+          ...s,
+          status: "done",
+          recordingId: data.id,
+          transcript: data.transcript,
+          stub: data.stub,
+        }));
+      } catch (err) {
+        setState((s) => ({ ...s, status: "error", error: (err as Error).message }));
+      }
+    },
+    [panelId, state.elapsedMs],
+  );
+
   const startRecording = useCallback(async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
       toast.addToast({
@@ -144,7 +178,7 @@ export function VoiceRecorder({ panelId, onTranscript, onClose, open }: Props) {
       });
       setState((s) => ({ ...s, status: "error", error: msg }));
     }
-  }, [startTick, toast]);
+  }, [startTick, toast, upload]);
 
   const stopRecording = useCallback(() => {
     stopTick();
@@ -155,39 +189,6 @@ export function VoiceRecorder({ panelId, onTranscript, onClose, open }: Props) {
     }
   }, [stopTick]);
 
-  const upload = useCallback(
-    async (blob: Blob) => {
-      setState((s) => ({ ...s, status: "uploading" }));
-      const form = new FormData();
-      const ext = blob.type.includes("mp4") ? "m4a"
-        : blob.type.includes("ogg") ? "ogg"
-        : "webm";
-      form.append("audio", blob, `voice-${Date.now()}.${ext}`);
-      if (panelId) form.append("panel_id", panelId);
-      form.append("duration_ms", String(state.elapsedMs));
-      try {
-        const data = await api<{
-          id: string;
-          transcript: string;
-          duration_ms: number;
-          stub: boolean;
-        }>("/voice", {
-          method: "POST",
-          body: form,
-        });
-        setState((s) => ({
-          ...s,
-          status: "done",
-          recordingId: data.id,
-          transcript: data.transcript,
-          stub: data.stub,
-        }));
-      } catch (err) {
-        setState((s) => ({ ...s, status: "error", error: (err as Error).message }));
-      }
-    },
-    [panelId, state.elapsedMs],
-  );
 
   const send = useCallback(() => {
     if (state.recordingId && state.transcript) {

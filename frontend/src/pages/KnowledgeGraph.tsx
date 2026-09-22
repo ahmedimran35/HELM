@@ -103,9 +103,11 @@ export function KnowledgeGraphPage() {
 
   // Until the first fetch settles, render a placeholder shape so the
   // canvas doesn't pop in empty. Defaults keep the rest of the page
-  // (sidebar / counts) untouched.
-  const viewNodes = nodes ?? [];
-  const viewEdges = edges ?? [];
+  // (sidebar / counts) untouched. Memoised so the `?? []` fallback
+  // keeps a stable identity across renders (otherwise every useMemo
+  // depending on these would recompute on each render).
+  const viewNodes = useMemo(() => nodes ?? [], [nodes]);
+  const viewEdges = useMemo(() => edges ?? [], [edges]);
   const isLoading = nodes === null || edges === null;
 
   // Resolved graph — filtered nodes + the edges that stay when both
@@ -177,7 +179,9 @@ export function KnowledgeGraphPage() {
     });
     positionsRef.current = next;
     setTick((t) => t + 1);
-  }, [view.nodes.length === 0 ? 0 : view.nodes[0]?.id, kindFilter, view.nodes]);
+    // `view.nodes` already changes identity whenever the first node or
+    // the filter changes, so it covers the old "first node id" term.
+  }, [view.nodes, kindFilter]);
 
   // Physics loop. Runs until the total kinetic energy falls under the
   // settle threshold OR MAX_FRAMES frames have elapsed (whichever first).
@@ -289,6 +293,10 @@ export function KnowledgeGraphPage() {
         degree: view.degreeMap.get(n.id) ?? 0,
       };
     });
+    // `tick` is a deliberate re-render trigger: the physics loop mutates
+    // positions in a ref (no state), then bumps `tick` so this memo
+    // recomputes. It is unused in the body by design.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.nodes, view.degreeMap, tick]);
 
   async function runExtract() {

@@ -38,13 +38,18 @@ this is the executive view.
 - Cross-site scripting (CSP, security headers, no innerHTML sinks)
 - Cross-site request forgery (origin guard on state-changing APIs)
 - Session hijacking (HttpOnly + Secure + SameSite cookies,
-  rotating session secret, server-side session store)
+  server-side session store, optional IP-bind revocation). Note:
+  sessions are opaque server-side IDs — there is no signed-cookie
+  rotation window.
 - Credential stuffing (per-IP + per-username rate limits on
   `/api/login`)
-- Sandbox escape (bash restricted env, symlink rejection, seccomp
-  defaults applied via k8s/compose)
+- Sandbox escape **only where exec is explicitly enabled**: shell
+  exec is disabled by default (`403 sandbox_isolation_required`) and,
+  when enabled via `SANDBOX_USE_UNSHARE=1`, runs in user/net/pid
+  namespaces. There is no seccomp filter, chroot, or rlimit — do not
+  treat the sandbox as a hardened jail. See `SANDBOX-ISOLATION.md`.
 - Supply-chain attacks (pinned digest base image, SBOM, provenance,
-  cosign-signed releases, gitleaks on every commit, weekly trivy)
+  cosign keyless-signed releases, gitleaks on every commit, weekly trivy)
 - IMDS credential exfiltration (egress lockdown verified by
   `egress-check.yml`)
 

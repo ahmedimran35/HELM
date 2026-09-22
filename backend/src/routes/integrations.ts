@@ -14,6 +14,7 @@ import { requireAdmin } from "../middleware/role.ts";
 import { logAudit } from "../lib/audit.ts";
 import { assertSafeBaseUrl } from "../providers/registry.ts";
 import { safeError } from "../lib/safe-error.ts";
+import { rawConsole } from "../lib/log.ts";
 
 const router = new Hono();
 router.use("*", requireAuth);
@@ -26,7 +27,10 @@ const ALLOWED_EVENTS = new Set([
   "panel_activity",
 ]);
 
-router.get("/", async (c) => {
+// Admin-only: the list carries service names, subscriptions, and masked
+// webhook URLs — operational config that shouldn't be visible to every
+// authenticated user. The UI entry point (/integrations) is admin-gated.
+router.get("/", requireAdmin, async (c) => {
   const rows = await sql<{
     id: string;
     service: string;
@@ -138,7 +142,7 @@ router.post("/:id/test", requireAdmin, async (c) => {
     }
   } catch (err) {
     result = "failed";
-    console.warn("[integrations] webhook test failed:", (err as Error).message);
+    rawConsole.warn("[integrations] webhook test failed:", (err as Error).message);
     error = "request_failed";
   }
   await logAudit({

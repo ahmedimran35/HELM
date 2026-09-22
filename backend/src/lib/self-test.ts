@@ -24,6 +24,7 @@ import { sql } from "../db/client.ts";
 import { getHarnessByKind } from "../harness/router.ts";
 import type { Harness } from "../harness/types.ts";
 import { logAudit } from "./audit.ts";
+import { rawConsole } from "../lib/log.ts";
 
 const MIN_CONTENT = 40;
 const MAX_CONTENT = 12_000;
@@ -142,12 +143,12 @@ export async function runSelfTest(messageId: string): Promise<SelfTestResult | n
         if (chunk.delta) assembled += chunk.delta;
       }
     } catch (err) {
-      console.warn("[self-test] judge failed:", (err as Error).message);
+      rawConsole.warn("[self-test] judge failed:", (err as Error).message);
       return null;
     }
     const parsed = parseJudge(assembled);
     if (!parsed) {
-      console.warn("[self-test] could not parse judge output:", assembled.slice(0, 200));
+      rawConsole.warn("[self-test] could not parse judge output:", assembled.slice(0, 200));
       return null;
     }
     const result: SelfTestResult = {
@@ -173,7 +174,7 @@ export async function runSelfTest(messageId: string): Promise<SelfTestResult | n
     return result;
   } catch (err) {
     // Self-test is best-effort; never crash the chat handler.
-    console.warn("[self-test] unhandled error:", (err as Error).message);
+    rawConsole.warn("[self-test] unhandled error:", (err as Error).message);
     return null;
   }
 }

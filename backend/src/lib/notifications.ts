@@ -55,7 +55,7 @@ export function startNotificationScheduler(): void {
   // Fire once on boot so the inbox doesn't wait a minute after restart.
   void tick();
   schedulerHandle = setInterval(() => void tick(), TICK_MS);
-  console.log("✓ notification scheduler started (tick =", TICK_MS, "ms)");
+  rawConsole.log("✓ notification scheduler started (tick =", TICK_MS, "ms)");
 }
 
 export function stopNotificationScheduler(): void {
@@ -83,7 +83,7 @@ async function insertNotification(input: InsertNotificationInput): Promise<boole
     SELECT id FROM notifications
     WHERE user_id = ${input.userId}::uuid
       AND dedup_key = ${dedupKey}
-      AND created_at > now() - INTERVAL '6 hours'
+      AND created_at > now() - (${DEDUP_MS}::text || ' milliseconds')::interval
     LIMIT 1
   `;
   if (recent.length > 0) return false;
@@ -106,7 +106,7 @@ async function tick(): Promise<void> {
   // Structured log line so an operator can correlate silence on the
   // notifications inbox with whatever this tick emitted. The shape is:
   //   [notifications] tick started ts=… jobs=4
-  console.log(
+  rawConsole.log(
     `[notifications] tick started ts=${new Date(tickStartedAt).toISOString()}`,
   );
   try {
@@ -123,7 +123,7 @@ async function tick(): Promise<void> {
     // errors so we only land here on truly unexpected scheduler bugs
     // (e.g. an out-of-memory killing a job). Surface the full error so
     // operators can triage.
-    console.warn("[notifications] tick failed:", (err as Error).message);
+    rawConsole.warn("[notifications] tick failed:", (err as Error).message);
   } finally {
     schedulerRunning = false;
     const elapsedMs = Date.now() - tickStartedAt;
@@ -131,7 +131,7 @@ async function tick(): Promise<void> {
     // failed — silent ticks (no log lines at all) used to be the
     // hardest thing to diagnose because there was no heartbeat to
     // assert against. The structured shape keeps this greppable.
-    console.log(
+    rawConsole.log(
       `[notifications] tick finished ms=${elapsedMs}`,
     );
   }
@@ -150,18 +150,18 @@ async function safeRun(name: string, fn: () => Promise<void>): Promise<void> {
     const elapsedMs = Date.now() - startedAt;
     // Log success too — when "did the budget_alerts job run last
     // hour?" is asked, the answer should be one grep away.
-    console.log(`[notifications] job ${name} ok ms=${elapsedMs}`);
+    rawConsole.log(`[notifications] job ${name} ok ms=${elapsedMs}`);
   } catch (err) {
     const elapsedMs = Date.now() - startedAt;
     const message = (err as Error).message;
     const stack = (err as Error).stack ?? "";
-    console.warn(
+    rawConsole.warn(
       `[notifications] job ${name} failed ms=${elapsedMs} message=${JSON.stringify(message)}`,
     );
     // Print the first few stack frames so the failure is traceable
     // without dumping the whole tree into the log.
     const head = stack.split("\n").slice(0, 4).join(" | ");
-    if (head) console.warn(`[notifications] job ${name} stack=${head}`);
+    if (head) rawConsole.warn(`[notifications] job ${name} stack=${head}`);
   }
 }
 
@@ -430,6 +430,7 @@ export async function updatePreference(
 
 import { Hono } from "hono";
 import { requireAuth } from "../middleware/auth.ts";
+import { rawConsole } from "../lib/log.ts";
 
 const router = new Hono();
 router.use("*", requireAuth);

@@ -9,7 +9,7 @@
 import { useEffect, useState } from "react";
 import { apiGet } from "../api/client";
 import { EmptyState } from "../components/ui/feedback/EmptyState";
-import { Skeleton, SkeletonTable } from "../components/ui/feedback/Skeleton";
+import { Skeleton } from "../components/ui/feedback/Skeleton";
 import { StatTile, LineChart, type LineDatum } from "../components/ui/data/charts";
 import {
   GaugeIcon,
@@ -18,7 +18,6 @@ import {
   DollarSignIcon,
   ActivityIcon,
   CheckIcon,
-  RefreshIcon,
 } from "../components/ui/Icon";
 import { cn } from "../lib/cn";
 

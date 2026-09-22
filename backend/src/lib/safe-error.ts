@@ -9,6 +9,7 @@
 // safeError(c, err, { status: 400, code: "bad_request" })` and get a
 // safe response without manual sanitisation.
 import type { Context } from "hono";
+import { rawConsole } from "../lib/log.ts";
 
 interface SafeErrorOptions {
   status?: 400 | 401 | 403 | 404 | 409 | 413 | 422 | 429 | 500 | 502 | 503;
@@ -23,7 +24,7 @@ interface SafeErrorOptions {
 export function safeError(c: Context, err: unknown, opts: SafeErrorOptions) {
   if (opts.log !== false) {
     // Log full error server-side; never echo to client.
-    console.warn(`[${opts.code}] ${(err as Error)?.message ?? err}`);
+    rawConsole.warn(`[${opts.code}] ${(err as Error)?.message ?? err}`);
   }
   return c.json(
     { error: opts.publicMessage ?? opts.code },

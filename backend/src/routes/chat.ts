@@ -20,6 +20,7 @@
 import { Hono } from "hono";
 import { sql } from "../db/client.ts";
 import { requireAuth } from "../middleware/auth.ts";
+import { rateLimit } from "../middleware/ratelimit.ts";
 import { logAudit } from "../lib/audit.ts";
 import { streamSSE } from "hono/streaming";
 import { validate, validationErrorResponse } from "../lib/validate.ts";
@@ -55,6 +56,8 @@ import {
   consumeStreamToSSE,
 } from "../lib/chat/stream.ts";
 import { assembleRetrievedContext } from "../lib/chat/context.ts";
+import { planSourcesInjection } from "../lib/chat/sources-injection.ts";
+import { rawConsole } from "../lib/log.ts";
 
 // Re-exported for ws.ts panel chat so it can enforce the same monthly
 // quota the HTTP /api/chat route enforces. See lib/chat/quota.ts for the
@@ -83,7 +86,10 @@ async function loadActiveModel(modelId: string): Promise<ModelRow | undefined> {
   return rows[0];
 }
 
-router.post("/", async (c) => {
+// Per-user throttle. Mounted as a route-level middleware (not at the app
+// level) so it runs AFTER `requireAuth` above has populated `c.get("user")`
+// — a user-scoped limiter that runs before auth silently no-ops.
+router.post("/", rateLimit({ limit: 120, windowMs: 60_000, scope: "user" }), async (c) => {
   const user = c.get("user");
   let body: {
     model_id?: string;
@@ -154,7 +160,7 @@ router.post("/", async (c) => {
     prompt: content,
     requestedHarness: isHarnessKind(harnessKind) ? harnessKind : null,
   }).catch((err) => {
-    console.warn("[chat] model-router failed:", (err as Error).message);
+    rawConsole.warn("[chat] model-router failed:", (err as Error).message);
     return null;
   });
   let activeModelId = modelId;
@@ -221,7 +227,7 @@ router.post("/", async (c) => {
         `;
         await writeDone(stream, 0, tokens);
       } catch (err) {
-        console.warn("[chat] cache replay failed:", (err as Error).message);
+        rawConsole.warn("[chat] cache replay failed:", (err as Error).message);
         await writeError(stream);
       }
     });
@@ -275,8 +281,6 @@ router.post("/", async (c) => {
 
   return streamSSE(c, async (stream) => {
     let assembled = "";
-    let usedCache = false;
-    let hasRealtimeSources = false;
     const ctrl = new AbortController();
     let promptTokens: number | undefined;
     let completionTokens: number | undefined;
@@ -309,58 +313,23 @@ router.post("/", async (c) => {
       assembled = streamText;
       promptTokens = pt;
       completionTokens = ct;
-      // Auto-append the full Sources list. We ALWAYS inject every
-      // search result, not just when the model forgot — many models
-      // either drop the bullet list, invent fake list items with
-      // no real source, or only cite a few of the available URLs.
-      // The user expects every real article we found to be listed.
-      // Dedup against URLs already in the *Sources section* only —
-      // the main list often re-cites the same URL several times
-      // Sources injection. We always strip whatever Sources section the
-      // model produced (regardless of where it placed it) and re-append
-      // a clean, ordered list at the END. This guarantees:
-      //   1. Sources always appear at the bottom (the user reads the
-      //      answer first, then checks sources).
-      //   2. No duplicate Sources blocks (the model sometimes emits
-      //      one section but the server also wants to add links it
-      //      missed).
-      //   3. The auto-injected list is always complete (every URL
-      //      the search returned is listed, even if the model
-      //      forgot to cite them).
-      if (searchSources.length > 0) {
-        // Strip ALL "## Sources" sections (case-insensitive, greedy) so
-        // we don't end up with the model's stray section + our appended
-        // one. We don't touch preceding content.
-        const stripPattern = /\n*##\s+Sources\s*\n[\s\S]*?(?=\n##\s|\n*$)/gim;
-        const stripped = assembled.replace(stripPattern, "").replace(/\s+$/, "");
-        const bullets = searchSources
-          .map((s) => `- [${s.title}](${s.url})`)
-          .join("\n");
-        const addition = stripped.length > 0
-          ? `\n\n## Sources\n${bullets}\n`
-          : `## Sources\n${bullets}\n`;
-        // Compute the diff so the SSE stream only emits the new tail.
-        const diff = assembled.length > stripped.length
-          ? addition
-          : (stripped + (stripped.length > 0 ? "\n\n" : "") + "## Sources\n" + bullets + "\n");
-        // Simpler: if we stripped anything, send the entire new tail
-        // (the strip forwards left a gap we fill by re-emitting).
-        if (stripped.length !== assembled.length) {
-          const newTail = (stripped.length > 0 ? stripped + "\n\n" : "") + "## Sources\n" + bullets + "\n";
-          const removedLen = assembled.length - stripped.length;
-          assembled = stripped + (stripped.length > 0 ? "\n\n" : "") + "## Sources\n" + bullets + "\n";
-          await stream.writeSSE({
-            event: "token",
-            data: JSON.stringify({ delta: "\n\n## Sources\n" + bullets + "\n", replaced_length: removedLen }),
-          });
-        } else {
-          // Nothing was stripped — just append the canonical section.
-          assembled += stripped.length > 0 ? "\n\n## Sources\n" + bullets + "\n" : "## Sources\n" + bullets + "\n";
-          await stream.writeSSE({
-            event: "token",
-            data: JSON.stringify({ delta: assembled }),
-          });
-        }
+      // Canonical Sources injection. See lib/chat/sources-injection.ts:
+      // it computes the exact delta (plus any trailing replacement) that
+      // takes the model's raw streamed text to a single, complete,
+      // bottom-anchored Sources list. The client applies
+      // `content.slice(0, len - replaced_length) + delta`.
+      const injection = planSourcesInjection(assembled, searchSources);
+      if (injection.delta !== null) {
+        assembled = injection.text;
+        await stream.writeSSE({
+          event: "token",
+          data: JSON.stringify({
+            delta: injection.delta,
+            ...(injection.replacedLength > 0
+              ? { replaced_length: injection.replacedLength }
+              : {}),
+          }),
+        });
       }
       // Detect "sources-only" responses — the model returned only the
       // Sources section without a lead sentence, which is what happens
@@ -369,7 +338,7 @@ router.post("/", async (c) => {
       // it as "the AI didn't respond". Strip the Sources section and
       // re-query the model WITHOUT the search context so the model
       // produces a real answer.
-      if (isSourcesOnlyResponse(assembled) && searchSources.length > 0 && !usedCache) {
+      if (isSourcesOnlyResponse(assembled) && searchSources.length > 0) {
         const refetch = await refetchIfSourcesOnly(
           {
             harness,
@@ -386,7 +355,6 @@ router.post("/", async (c) => {
           assembled = refetch.assembled;
           if (typeof refetch.promptTokens === "number") promptTokens = refetch.promptTokens;
           if (typeof refetch.completionTokens === "number") completionTokens = refetch.completionTokens;
-          hasRealtimeSources = refetch.hasRealtimeSources;
         }
       }
       // Persist the assistant message.
@@ -407,7 +375,7 @@ router.post("/", async (c) => {
           const citations = extractCitations(assembled, searchSources);
           await persistCitations(assistantMessageId, citations);
         } catch (err) {
-          console.warn("[chat] citation extract failed:", (err as Error).message);
+          rawConsole.warn("[chat] citation extract failed:", (err as Error).message);
         }
       }
       // All other post-turn bookkeeping: harness_runs row, audit log,
@@ -433,7 +401,7 @@ router.post("/", async (c) => {
       // log shows dropped calls too. We don't have a completion
       // token count or full prompt tokens, so write zeros.
       const latencyMs = Date.now() - streamStart;
-      console.warn("[chat] stream failed:", (err as Error).message);
+      rawConsole.warn("[chat] stream failed:", (err as Error).message);
       await recordFailedTurn({
         userId: user.id,
         harnessKind: activeHarnessKind,

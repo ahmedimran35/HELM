@@ -18,7 +18,7 @@ import { Hono } from "hono";
 import { sql } from "../db/client.ts";
 import { requireAuth } from "../middleware/auth.ts";
 import { requireAdmin } from "../middleware/role.ts";
-import { parsePagination, paginatedResponse } from "../lib/pagination.ts";
+import { parsePagination } from "../lib/pagination.ts";
 import { logAudit } from "../lib/audit.ts";
 import { getPresence } from "../lib/presence.ts";
 import { summarizePanel } from "../lib/summarize.ts";
@@ -26,7 +26,6 @@ import { autoSummarizePanel } from "../lib/auto-summarize.ts";
 import {
   listSnapshots,
   getSnapshotsFrom,
-  type PanelSnapshotState,
 } from "../lib/snapshots.ts";
 
 const router = new Hono();

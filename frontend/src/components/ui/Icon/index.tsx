@@ -29,44 +29,6 @@ export type IconProps = Omit<SVGProps<SVGSVGElement>, "children"> & {
   title?: string;
 };
 
-const BaseIcon = forwardRef<SVGSVGElement, IconProps & { d: string; fillRule?: string }>(
-  function BaseIcon(
-    {
-      d,
-      size = 16,
-      strokeWidth = 1.5,
-      title,
-      className = "",
-      fillRule,
-      ...rest
-    },
-    ref,
-  ) {
-    const ariaProps = title
-      ? ({ role: "img", "aria-label": title } as const)
-      : ({ "aria-hidden": true } as const);
-    return (
-      <svg
-        ref={ref}
-        width={size}
-        height={size}
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={strokeWidth}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className={`inline-block shrink-0 ${className}`}
-        {...ariaProps}
-        {...rest}
-      >
-        {title ? <title>{title}</title> : null}
-        <path d={d} fillRule={fillRule} />
-      </svg>
-    );
-  },
-);
-
 // Helper: build a polyline/path from sub-paths so we can describe icons
 // that need more than one stroke (e.g. a checkmark + a circle).
 function Path(

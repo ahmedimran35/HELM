@@ -18,7 +18,6 @@ import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Avatar } from "../components/ui/Avatar";
-import { AvatarStack } from "../components/ui/data/AvatarStack";
 import { PresenceDot } from "../components/ui/data/PresenceDot";
 import { StatusPill } from "../components/ui/feedback/StatusPill";
 import { EmptyState } from "../components/ui/feedback/EmptyState";
@@ -222,7 +221,7 @@ export function PanelsPage() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("members");
   // Tier 1 co-pilot state.
   const [presence, setPresence] = useState<PresenceUser[]>([]);
-  const [presenceLoaded, setPresenceLoaded] = useState(false);
+  const [, setPresenceLoaded] = useState(false);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [pendingApproval, setPendingApproval] = useState<Approval | null>(null);
   const [humanTypers, setHumanTypers] = useState<Set<string>>(new Set());
@@ -344,8 +343,7 @@ export function PanelsPage() {
   // Admins see the full user list so they can invite. Users see the
   // same list so they know who's already on the panel (read-only).
   useEffect(() => {
-    if (!user) return;
-    if (user.role !== "admin") return;
+    if (user?.role !== "admin") return;
     apiGet<AvailableUser[]>("/users").then(setAllUsers).catch(() => {});
   }, [user?.role]);
 
@@ -403,7 +401,7 @@ export function PanelsPage() {
 
   // WebSocket subscription while a panel is active.
   useEffect(() => {
-    if (!active || !user) return;
+    if (!active || !user?.id) return;
     const url = buildPanelWsUrl(active);
     if (!url) {
       // Defensive: if the id fails validation, skip rather than open
@@ -511,7 +509,7 @@ export function PanelsPage() {
       ws.close();
       wsRef.current = null;
     };
-  }, [active]);
+  }, [active, user?.id]);
 
   function pickModel(m: AvailableModel) {
     const external = m.external_id;
@@ -1605,7 +1603,6 @@ function SkillGrantPicker({
   available: AvailableSkill[];
   onToggle: (id: string) => void;
 }) {
-  const granted = grantedIds; // local alias for the granted set
   const sorted = [...available].sort((a, b) => {
     const ag = grantedIds.includes(a.id) ? 1 : 0;
     const bg = grantedIds.includes(b.id) ? 1 : 0;
@@ -1667,6 +1664,8 @@ function AddMemberPicker({
   onAdd: (id: string) => Promise<void> | void;
 }) {
   const candidates = allUsers.filter((u) => !existingIds.includes(u.id));
+  const [picked, setPicked] = useState<string>("");
+  const [adding, setAdding] = useState(false);
   if (candidates.length === 0) {
     return (
       <div className="mono-caps text-[10px] text-textFaint">
@@ -1674,8 +1673,6 @@ function AddMemberPicker({
       </div>
     );
   }
-  const [picked, setPicked] = useState<string>("");
-  const [adding, setAdding] = useState(false);
   return (
     <div className="space-y-2">
       <p className="mono-caps text-[10px] text-textMuted">Add a member</p>

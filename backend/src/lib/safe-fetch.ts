@@ -54,18 +54,6 @@ const PRIVATE_IPV4_RANGES: Array<[RegExp, number]> = [
   [/^255\./, 0],          // broadcast
 ];
 
-function ipv4ToInt(s: string): number | null {
-  const parts = s.split(".");
-  if (parts.length !== 4) return null;
-  let n = 0;
-  for (const p of parts) {
-    const v = Number(p);
-    if (!Number.isInteger(v) || v < 0 || v > 255) return null;
-    n = (n << 8) | v;
-  }
-  return n >>> 0;
-}
-
 function isPrivateIPv4(host: string): boolean {
   for (const [re] of PRIVATE_IPV4_RANGES) {
     if (re.test(host)) return true;
@@ -120,6 +108,7 @@ export async function assertSafeOutboundUrl(
     throw new SafeFetchError("URL must be a string");
   }
   // Reject control characters and whitespace early.
+  // eslint-disable-next-line no-control-regex
   if (/[\x00-\x1f\x7f\s]/.test(rawUrl)) {
     emitSsrfBlock("control_or_whitespace", "");
     throw new SafeFetchError("URL contains control or whitespace characters");
@@ -283,6 +272,7 @@ export async function safeFetch(
     let total = 0;
     const chunks: Uint8Array[] = [];
     const reader = res.body.getReader();
+    // eslint-disable-next-line no-constant-condition
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;

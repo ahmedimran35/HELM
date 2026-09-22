@@ -14,8 +14,8 @@
 // `bun src/cli.ts up` gets a working install.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { join } from "node:path";
+import { spawn } from "node:child_process";
 import { sql } from "./db/client.ts";
 import { runMigrations } from "./db/migrate.ts";
 import { runBootstrap } from "./auth/bootstrap.ts";
@@ -23,6 +23,7 @@ import { runSkillsSeed } from "./db/seed/skills-seed.ts";
 import { seedAppsIfEmpty } from "./db/seed/apps-seed.ts";
 import { generateOneTimePassword } from "./lib/ids.ts";
 import { hashPassword } from "./auth/password.ts";
+import { rawConsole } from "./lib/log.ts";
 
 // ─── Tiny ANSI helpers (kept dependency-free so we don't need chalk) ───
 const C = {
@@ -41,7 +42,7 @@ function banner(): void {
   const lines = [
     `${paint(C.bold + C.brass, "  HELM")} ${paint(C.dim, "v0.1  ·  governed multiplayer ai workspace")}`,
   ];
-  for (const l of lines) console.log(l);
+  for (const l of lines) rawConsole.log(l);
 }
 
 // ─── Env probing ────────────────────────────────────────────────────────
@@ -112,7 +113,7 @@ function provisionEnv(): ProvisionedEnv {
       SESSION_SECRET: out.SESSION_SECRET,
       REDIS_URL: out.REDIS_URL,
     });
-    console.log(paint(C.dim, `  · wrote auto-generated secrets → .helm-secrets`));
+    rawConsole.log(paint(C.dim, `  · wrote auto-generated secrets → .helm-secrets`));
   }
   // Push the resolved values into process.env so the api server picks
   // them up when we spawn it (the api's config module reads .env via
@@ -131,24 +132,24 @@ function provisionEnv(): ProvisionedEnv {
 async function cmdUp(): Promise<number> {
   banner();
   const env = provisionEnv();
-  console.log(paint(C.bold, "\n→ migrate"));
+  rawConsole.log(paint(C.bold, "\n→ migrate"));
   const mig = await runMigrations();
-  console.log(
+  rawConsole.log(
     paint(
       C.dim,
       `  applied ${mig.applied.length} · skipped ${mig.skipped.length}`,
     ),
   );
-  console.log(paint(C.bold, "\n→ bootstrap first admin"));
+  rawConsole.log(paint(C.bold, "\n→ bootstrap first admin"));
   const boot = await runBootstrap();
   if (boot.seeded) {
-    console.log(paint(C.teal, `  ✓ seeded admin "${env.ADMIN_USERNAME}"`));
+    rawConsole.log(paint(C.teal, `  ✓ seeded admin "${env.ADMIN_USERNAME}"`));
   } else {
-    console.log(paint(C.dim, "  · admin already exists, skipping"));
+    rawConsole.log(paint(C.dim, "  · admin already exists, skipping"));
   }
-  console.log(paint(C.bold, "\n→ seed skill packs"));
+  rawConsole.log(paint(C.bold, "\n→ seed skill packs"));
   await runSkillsSeed();
-  console.log(paint(C.bold, "\n→ seed demo apps"));
+  rawConsole.log(paint(C.bold, "\n→ seed demo apps"));
   await seedAppsIfEmpty();
 
   // Probe harnesses + jobs so the "summary" line is real, not aspirational.
@@ -156,25 +157,24 @@ async function cmdUp(): Promise<number> {
 
   const port = Number(process.env.API_PORT ?? "3000");
   const url = `http://localhost:${port}`;
-  console.log(paint(C.bold, "\n→ starting api"));
-  console.log(paint(C.green, `  ✓ ${url}`));
-  console.log(paint(C.bold, "\n  one-line summary:"));
-  console.log(`    ${features}`);
+  rawConsole.log(paint(C.bold, "\n→ starting api"));
+  rawConsole.log(paint(C.green, `  ✓ ${url}`));
+  rawConsole.log(paint(C.bold, "\n  one-line summary:"));
+  rawConsole.log(`    ${features}`);
 
   if (boot.seeded) {
-    console.log(
+    rawConsole.log(
       `\n  ${paint(C.brass, "admin")}  ${env.ADMIN_USERNAME} / ${paint(C.bold, env.ADMIN_PASSWORD)}`,
     );
-    console.log(
+    rawConsole.log(
       `  ${paint(C.dim, "open")}   ${url}\n  ${paint(C.dim, "(change the admin password after first login)")}`,
     );
   } else {
-    console.log(`\n  ${paint(C.dim, "api ready at")} ${url}`);
+    rawConsole.log(`\n  ${paint(C.dim, "api ready at")} ${url}`);
   }
 
   // Spawn the api in the foreground so the process tree stays clean.
   // `inherit` stdio so the user sees the api logs in real time.
-  const indexPath = join(import.meta.dir, "index.ts");
   const child = spawn("bun", ["src/index.ts"], {
     cwd: join(import.meta.dir, ".."),
     stdio: "inherit",
@@ -200,7 +200,7 @@ async function cmdStatus(): Promise<number> {
   }
 
   const jobs = await probeJobs();
-  console.log("");
+  rawConsole.log("");
   printRow("postgres", dbOk.ok ? "ok" : "down", dbOk.detail);
   printRow("api", apiOk.ok ? "ok" : "down", apiOk.detail ?? "unknown");
   printRow("schedulers", jobs.watchScheduler ? "ok" : "down", "watch scheduler");
@@ -209,9 +209,9 @@ async function cmdStatus(): Promise<number> {
   printRow("users", `${counts.users}`, "active accounts");
   printRow("panels", `${counts.panels}`, "active panels");
   printRow("workflows", `${counts.workflows}`, "active workflows");
-  console.log("");
+  rawConsole.log("");
   if (!apiOk.ok && !dbOk.ok) {
-    console.log(paint(C.rust, "  system down — try `bun src/cli.ts up`"));
+    rawConsole.log(paint(C.rust, "  system down — try `bun src/cli.ts up`"));
     return 2;
   }
   return apiOk.ok && dbOk.ok ? 0 : 1;
@@ -228,10 +228,10 @@ async function cmdLogs(opts: { lines: number }): Promise<number> {
       ORDER BY a.created_at DESC
       LIMIT ${opts.lines}
     `;
-    console.log(paint(C.bold, `\n  audit (last ${audit.length})\n`));
+    rawConsole.log(paint(C.bold, `\n  audit (last ${audit.length})\n`));
     for (const r of audit) {
       const ts = r.ts.toISOString().replace("T", " ").slice(0, 19);
-      console.log(
+      rawConsole.log(
         `  ${paint(C.dim, ts)}  ${paint(C.brass, (r.user_name ?? "system").padEnd(14))} ${r.action} ${paint(C.dim, r.target)}`,
       );
     }
@@ -244,15 +244,15 @@ async function cmdLogs(opts: { lines: number }): Promise<number> {
       ORDER BY s.login_at DESC
       LIMIT 10
     `;
-    console.log(paint(C.bold, `\n  active sessions (${sessions.length})\n`));
+    rawConsole.log(paint(C.bold, `\n  active sessions (${sessions.length})\n`));
     for (const r of sessions) {
       const ts = r.ts.toISOString().replace("T", " ").slice(0, 19);
-      console.log(
+      rawConsole.log(
         `  ${paint(C.dim, ts)}  ${paint(C.brass, (r.user_name ?? "unknown").padEnd(14))} ${paint(C.dim, r.ip ?? "local")}`,
       );
     }
   } catch (err) {
-    console.error(paint(C.rust, `✗ log query failed: ${(err as Error).message}`));
+    rawConsole.error(paint(C.rust, `✗ log query failed: ${(err as Error).message}`));
     return 1;
   }
   return 0;
@@ -261,7 +261,7 @@ async function cmdLogs(opts: { lines: number }): Promise<number> {
 async function cmdResetPassword(username: string): Promise<number> {
   banner();
   if (!username) {
-    console.error(paint(C.rust, "✗ usage: bun src/cli.ts reset-password <username>"));
+    rawConsole.error(paint(C.rust, "✗ usage: bun src/cli.ts reset-password <username>"));
     return 2;
   }
   try {
@@ -270,7 +270,7 @@ async function cmdResetPassword(username: string): Promise<number> {
     `;
     const row = found[0];
     if (!row) {
-      console.error(paint(C.rust, `✗ no user with username "${username}"`));
+      rawConsole.error(paint(C.rust, `✗ no user with username "${username}"`));
       return 1;
     }
     const newPw = generateOneTimePassword();
@@ -279,24 +279,24 @@ async function cmdResetPassword(username: string): Promise<number> {
       UPDATE users SET password_hash = ${hash}, must_change_password = TRUE
       WHERE id = ${row.id}::uuid
     `;
-    console.log(paint(C.green, `\n  ✓ reset ${username}'s password:`));
-    console.log(paint(C.bold, `    ${newPw}\n`));
-    console.log(paint(C.dim, "  · they must change this on next login"));
+    rawConsole.log(paint(C.green, `\n  ✓ reset ${username}'s password:`));
+    rawConsole.log(paint(C.bold, `    ${newPw}\n`));
+    rawConsole.log(paint(C.dim, "  · they must change this on next login"));
     return 0;
   } catch (err) {
-    console.error(paint(C.rust, `✗ ${(err as Error).message}`));
+    rawConsole.error(paint(C.rust, `✗ ${(err as Error).message}`));
     return 1;
   }
 }
 
 async function cmdSeed(): Promise<number> {
   banner();
-  console.log(paint(C.bold, "\n→ running all seeders"));
+  rawConsole.log(paint(C.bold, "\n→ running all seeders"));
   await runMigrations();
   await runBootstrap();
   await runSkillsSeed();
   await seedAppsIfEmpty();
-  console.log(paint(C.green, "  ✓ done"));
+  rawConsole.log(paint(C.green, "  ✓ done"));
   return 0;
 }
 
@@ -384,7 +384,7 @@ async function probeFeatures(): Promise<string> {
 
 function printRow(group: string, value: string, detail: string): void {
   const tag = value === "ok" ? paint(C.teal, "✓") : value === "down" ? paint(C.rust, "✗") : "·";
-  console.log(`  ${tag}  ${paint(C.bold, group.padEnd(11))} ${value.padEnd(6)}  ${paint(C.dim, detail)}`);
+  rawConsole.log(`  ${tag}  ${paint(C.bold, group.padEnd(11))} ${value.padEnd(6)}  ${paint(C.dim, detail)}`);
 }
 
 // ─── Entry point ────────────────────────────────────────────────────────
@@ -412,7 +412,7 @@ async function main(): Promise<number> {
       printHelp();
       return cmd ? 2 : 0;
     default:
-      console.error(paint(C.rust, `✗ unknown command: ${cmd}`));
+      rawConsole.error(paint(C.rust, `✗ unknown command: ${cmd}`));
       printHelp();
       return 2;
   }
@@ -420,7 +420,7 @@ async function main(): Promise<number> {
 
 function printHelp(): void {
   banner();
-  console.log(`
+  rawConsole.log(`
 ${paint(C.bold, "Usage:")}  bun src/cli.ts <command> [args]
 
 ${paint(C.bold, "Commands:")}
@@ -447,7 +447,7 @@ if (import.meta.main) {
       process.exit(code);
     })
     .catch((err) => {
-      console.error(paint(C.rust, `✗ ${(err as Error).message}`));
+      rawConsole.error(paint(C.rust, `✗ ${(err as Error).message}`));
       process.exit(1);
     });
 }

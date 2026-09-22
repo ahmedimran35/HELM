@@ -3,10 +3,15 @@
 The HELM "sandbox" lets a user execute shell commands inside a
 per-user working directory. Today (Phase 5+) we use:
 
-> **Current state:** `bash -lc <command>` with a stripped `env`, a
-> per-user `cwd` under `tmp/sandbox/<user_id>/`, a hard wall-clock
-> timeout, a per-stream output cap, and audit logging of every exec
-> call.
+> **Current state:** `bash -c <command>` (non-login) with a stripped
+> `env`, a per-user `cwd` under `tmp/sandbox/<user_id>/`, a hard
+> wall-clock timeout, a per-stream output cap, and audit logging of
+> every exec call.
+>
+> **Exec is disabled by default.** The endpoint refuses every caller
+> with `403 sandbox_isolation_required` unless the operator opts in via
+> `SANDBOX_USE_UNSHARE=1` (Linux) or `SANDBOX_ALLOW_UNSAFE_EXEC=1`
+> (single-user dev hosts only).
 
 That's not a jail. A determined user can `curl`, `wget`, or read
 arbitrary files on the host's filesystem (subject to the process's
@@ -90,9 +95,10 @@ gcc -O2 -o /usr/local/bin/sandbox-launcher sandbox-launcher.c
 Wire it in `backend/src/routes/sandbox.ts`:
 
 ```ts
-// Replace `bash -lc <cmd>` with `sandbox-launcher <cwd> bash -lc <cmd>`.
+// Replace the current `bash -c <cmd>` spawn with
+// `sandbox-launcher <cwd> bash -c <cmd>`.
 const proc = Bun.spawn(["/usr/local/bin/sandbox-launcher", sessionDir(userId, sessionId),
-                        "bash", "-lc", cmd], { ... });
+                        "bash", "-c", cmd], { ... });
 ```
 
 **Kernel requirements:** Linux ≥ 3.8 (unprivileged user namespaces
@@ -150,8 +156,9 @@ until the rollout is stable.
 
 | Workload | Path | Why |
 | --- | --- | --- |
-| Single-tenant, trusted user | current (bash) | Simplicity wins. |
-| Single-tenant, untrusted user | `unshare` | One-day work. Closes the obvious filesystem-share escape. |
+| No exec needed | leave disabled (default) | Exec is refused unless explicitly enabled. |
+| Single-tenant, trusted user | `SANDBOX_ALLOW_UNSAFE_EXEC=1` | Simplest; no namespace isolation. Dev boxes only. |
+| Single-tenant, untrusted user | `SANDBOX_USE_UNSHARE=1` | Closes the obvious filesystem-share escape. Still shares host UID. |
 | Multi-tenant SaaS | `firecracker` | Hard isolation, scales horizontally. |
 | Compliance-bound (SOC2, HIPAA) | `firecracker` | Required by auditors. |
 

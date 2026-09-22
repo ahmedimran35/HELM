@@ -4,6 +4,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
+import { rawConsole } from "./lib/log.ts";
 
 const ROOT_ENV = join(import.meta.dir, "..", "..", ".env");
 
@@ -61,7 +62,7 @@ function resolveSessionSecret(): string {
   const v = process.env.SESSION_SECRET;
   if (v && v.length > 0) return v;
   const ephemeral = randomBytes(32).toString("hex");
-  console.warn(
+  rawConsole.warn(
     "[config] WARNING: SESSION_SECRET is not set — generated an ephemeral " +
       "in-memory secret. Set SESSION_SECRET (e.g. `openssl rand -hex 32`) for " +
       "any non-dev deployment; without it, sessions and encrypted provider " +

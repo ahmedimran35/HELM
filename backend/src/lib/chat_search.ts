@@ -5,6 +5,7 @@
 
 import { smartSearch, classifyQuery, type QueryIntent } from "./web_search.ts";
 import { safeFetch, assertSafeOutboundUrl, SafeFetchError } from "./safe-fetch.ts";
+import { rawConsole } from "../lib/log.ts";
 
 export interface WebSearchResult {
   title: string;
@@ -86,7 +87,7 @@ export async function callLightpandaForUrl(url: string): Promise<WebSearchRespon
     // SSRF rejections fall here too. We surface the reason via trace so
     // the chat can let the user know the URL was blocked for safety.
     if (err instanceof SafeFetchError) {
-      console.warn(`chat url blocked by safeFetch: ${err.message}`);
+      rawConsole.warn(`chat url blocked by safeFetch: ${err.message}`);
       return {
         query: url,
         service: "safe_blocked",
