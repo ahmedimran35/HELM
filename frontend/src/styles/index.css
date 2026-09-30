@@ -6,8 +6,9 @@
 /* Theming                                                                     */
 /* -------------------------------------------------------------------------- */
 /* Dark = the default ops-console palette (docs §1). Light is a derived
-   palette using the same design tokens inverted: warm off-white surfaces,
-   dark slate text, brass retained for the signature accent.               */
+   palette using the same design tokens inverted, but it keeps a real
+   three-level surface stack (bg < panelAlt < panel) with visible borders
+   — see the contrast targets in the light block below.                     */
 
 :root,
 :root[data-theme="dark"] {
@@ -16,26 +17,37 @@
      them with the standard `<alpha-value>` placeholder. This is what
      lets bg-bg, text-text, border-border, etc. read from the live
      variables at runtime instead of being inlined at build time. */
-  /* Dark surface stack — slate default (cool blue-tinted dark). bg
-     rgb(28,32,44) is "soft slate" rather than near-black; panels
-     lift to rgb(54,62,84) for clear ~9:1 panel pop. Borders at
-     rgb(100,114,140) (6:1 vs bg) are clearly visible without
-     feeling heavy. Tuned to avoid the "big black blocks" effect —
-     everything reads as a layered surface, not as low contrast. */
-  --bg-rgb: 28 32 44;             /* soft slate-blue bg */
-  --panel-rgb: 54 62 84;          /* lifted cards — clear pop */
-  --panelAlt-rgb: 40 48 66;       /* medium sections — distinct from panel */
-  --border-rgb: 100 114 140;      /* cool border — 6:1 vs bg */
-  --borderSoft-rgb: 80 94 122;    /* soft but present */
-  --text-rgb: 234 234 242;
-  --textMuted-rgb: 178 186 202;
-  --textFaint-rgb: 138 148 168;
-  --brass-rgb: 220 184 64;        /* slightly brighter brass for dark bg */
-  --brassSoft-rgb: 156 128 38;
-  --teal-rgb: 96 184 168;
-  --rust-rgb: 220 110 86;
-  --gridColor: rgba(100, 114, 140, 0.16);
-  --shadowMd: 0 10px 28px rgba(0, 0, 0, 0.65);
+  /* Dark surface stack — deep indigo, NOT grey slate. The previous revision
+     used near-grey navy tones (28 32 44 / 54 62 84) whose surfaces differed
+     only in lightness, so the whole app read as "drab grey". These are
+     genuinely tinted (blue channel leads, red trails) which is what makes a
+     dark UI feel designed rather than muddy.
+     Stack, darkest to lightest: bg 14 18 34 < panelAlt 20 25 44 < panel 30 38 66.
+     (An earlier pass had panel and panelAlt only 1.06:1 apart, which made the
+     two surfaces indistinguishable — keep this separation.)
+     Accents are saturated: brass is bright gold (255 205 50) and teal is
+     vibrant (80 220 195) so there is real colour to look at, not just grey
+     plus one muddy accent. */
+  --bg-rgb: 14 18 34;             /* deep indigo bg */
+  --panel-rgb: 30 38 66;          /* lifted navy panel — 1.23:1 vs bg */
+  --panelAlt-rgb: 20 25 44;       /* inset — 1.17:1 vs panel, 1.07:1 vs bg */
+  --border-rgb: 68 84 128;        /* blue-tinted border — 2.0:1 vs panel */
+  --borderSoft-rgb: 52 64 98;     /* quiet but present — 1.46:1 vs panel */
+  --text-rgb: 230 235 248;        /* near-white */
+  --textMuted-rgb: 150 165 205;   /* cool, saturated */
+  --textFaint-rgb: 130 145 190;   /* 5.04:1 vs bg, 4.78:1 vs panel — AA on both */
+  --brass-rgb: 255 205 50;        /* bright gold — the hero accent */
+  --brassSoft-rgb: 200 165 40;    /* deeper gold for hover */
+  --teal-rgb: 80 220 195;         /* vibrant secondary — now visible */
+  --rust-rgb: 245 120 85;         /* warmer, saturated */
+  --gridColor: rgba(68, 84, 128, 0.08);   /* quieter — fades into bg */
+  /* Card elevation: two tight layers (a 1px contact shadow plus a soft
+     ambient one) instead of a single wide blur. Two tight layers is what
+     reads as a "standard" card in a modern UI; one wide blur reads as a
+     glow. Deeper here than light mode because a dark surface needs more
+     shadow to read as lifted. Overlays keep their own Tailwind shadow-*. */
+  --shadowCard: 0 1px 2px rgba(0, 0, 0, 0.55), 0 1px 3px rgba(0, 0, 0, 0.35);
+  --shadowCardHover: 0 2px 6px rgba(0, 0, 0, 0.60), 0 4px 12px rgba(0, 0, 0, 0.40);
   /* The legacy non-RGB vars are kept for hand-written rules in index.css. */
   --bg: rgb(var(--bg-rgb));
   --panel: rgb(var(--panel-rgb));
@@ -53,29 +65,34 @@
 
 :root[data-theme="light"] {
   color-scheme: light;
-  /* Light theme — warm cream paper with crisp white cards. Visibility
-     comes from:
-       (1) text/border contrast vs bg (all >= 3:1, text 16:1 AAA),
-       (2) pure-white panels against the cream bg,
-       (3) strong structural borders on every card.
-     We intentionally avoid a deep brown panelAlt; the surface hierarchy
-     is carried by panel (white) vs bg (warm cream) plus borders. */
-  --bg-rgb: 245 240 230;          /* warm cream paper */
-  --panel-rgb: 255 255 255;       /* pure white cards */
-  --panelAlt-rgb: 240 232 215;    /* subtle warm cream — section break */
-  --border-rgb: 130 110 80;       /* warm brass-brown — clearly visible */
-  --borderSoft-rgb: 150 130 95;   /* softer but still 3.3:1 vs bg */
-  --text-rgb: 18 22 30;           /* near black — 16:1 AAA */
-  --textMuted-rgb: 55 62 75;      /* dark slate — 9.5:1 AAA */
-  --textFaint-rgb: 96 104 118;    /* readable gray — 4.9:1 AA */
-  --brass-rgb: 135 95 14;         /* medium brass — 5.0:1 AA */
-  --brassSoft-rgb: 160 118 28;    /* lighter brass — 3.6:1 AA-Large */
-  --teal-rgb: 28 90 80;           /* medium teal — 7.0:1 AAA */
-  --rust-rgb: 150 60 42;          /* medium rust — 6.2:1 AA */
-  --gridColor: rgba(18, 22, 30, 0.04);
-  /* Soft shadow gives cards depth against the cream bg without needing
-     a deep panelAlt. Tuned so it's perceptible but not heavy. */
-  --shadowMd: 0 4px 14px rgba(18, 22, 30, 0.10);
+  /* Light theme — warm cream paper with rich earth accents.
+     ------------------------------------------------------------------
+     Layering rule (mirrors dark mode, inverted). The three surfaces must be
+     perceptibly stepped or the whole UI reads as one flat sheet:
+         bg (warm cream)  <  panelAlt (warm inset)  <  panel (white)
+     The previous revision used near-grey neutrals (238 237 234 / 228 227 223)
+     with a dark muddy brass, which read as "drab grey". These are genuinely
+     warm (red channel leads, blue trails) and the brass is richer, so the UI
+     has colour rather than being a grey wash with one dull accent.
+     Keep the warm cast deliberate but mild — if R−B grows much beyond ~12 the
+     paper starts to look yellow. Do not lighten panelAlt or border: an earlier
+     revision made them ~1.03:1 against white and erased every inset and
+     divider. Exact ratios are asserted by the contrast check, not by hand. */
+  --bg-rgb: 240 236 228;           /* warm cream paper — white cards pop 1.18:1 */
+  --panel-rgb: 255 255 255;        /* pure white cards — pop up off bg */
+  --panelAlt-rgb: 232 226 216;     /* warm beige inset — visibly recessed */
+  --border-rgb: 195 188 174;       /* warm border — crisp, not grey */
+  --borderSoft-rgb: 218 212 202;   /* warm quiet divider */
+  --text-rgb: 22 20 18;            /* near-black, warm */
+  --textMuted-rgb: 75 70 62;       /* warm grey */
+  --textFaint-rgb: 106 99 87;      /* warm, 5.04:1 vs bg — AA on both */
+  --brass-rgb: 145 92 10;          /* rich brass, 4.77:1 vs bg — AA */
+  --brassSoft-rgb: 195 145 35;     /* brighter brass for hover/soft fills */
+  --teal-rgb: 28 115 92;           /* saturated teal, matches dark theme */
+  --rust-rgb: 175 60 30;           /* warmer rust */
+  --gridColor: rgba(22, 20, 18, 0.03);    /* quieter — the grid was noisy */
+  --shadowCard: 0 1px 2px rgba(22, 20, 18, 0.06), 0 1px 3px rgba(22, 20, 18, 0.08);
+  --shadowCardHover: 0 2px 5px rgba(22, 20, 18, 0.08), 0 4px 10px rgba(22, 20, 18, 0.12);
   --bg: rgb(var(--bg-rgb));
   --panel: rgb(var(--panel-rgb));
   --panelAlt: rgb(var(--panelAlt-rgb));
@@ -90,6 +107,17 @@
   --rust: rgb(var(--rust-rgb));
 }
 
+/* Shared, theme-independent tokens. Radius is deliberately small (4–10px):
+   the product keeps its engineered character, but 0px corners on every
+   surface read as "flat and unfinished" to anyone who does not already know
+   the aesthetic. Keep `rounded-none` only for genuinely terminal-style
+   details (status dots, ASCII chevrons), never for interactive surfaces. */
+:root {
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+}
+
 html,
 body,
 #root {
@@ -102,7 +130,7 @@ body {
   color: var(--text);
   font-family: "Inter", system-ui, sans-serif;
   font-size: 14px;
-  line-height: 20px;
+  line-height: 1.55;
   background-image:
     linear-gradient(to right, var(--gridColor) 1px, transparent 1px),
     linear-gradient(to bottom, var(--gridColor) 1px, transparent 1px);
@@ -118,8 +146,8 @@ body {
 
 :focus-visible {
   outline: none;
-  box-shadow: 0 0 0 1px var(--brass);
-  border-radius: 2px;
+  box-shadow: 0 0 0 2px rgb(var(--brass-rgb) / 0.45);
+  border-radius: var(--radius-sm);
 }
 
 .mono-caps {
@@ -130,15 +158,79 @@ body {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Page title                                                                  */
+/* -------------------------------------------------------------------------- */
+/* One canonical page heading. Before this, 23 page titles shipped at six
+   different sizes (20 / 22 / 24 / 26 / 28px nothing else changed), so the
+   hierarchy was re-learned on every route. Card-level headings deliberately
+   stay in the 13–18px band — that separation is what makes the page title
+   read as the page title. */
+
+.page-title {
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.page-subtitle {
+  font-size: 13px;
+  color: var(--textMuted);
+  margin-top: 6px;
+  max-width: 70ch;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Panel surface                                                               */
 /* -------------------------------------------------------------------------- */
-/* Every element with `bg-panel` (white cards on a cream bg) gets a hairline
-   shadow so cards lift visibly against the surface. Without this, the only
-   separation is the border — which disappears if a card uses border-transparent
-   or no border at all. Tuned very light for light mode; deeper for dark. */
+/* Every element with `bg-panel` (white cards on the light bg / lifted cards
+   on the dark bg) gets a hairline shadow so cards lift visibly against the
+   surface. Without this, the only separation is the border — which disappears
+   if a card uses border-transparent or no border at all. `bg-panelAlt` insets
+   are deliberately excluded: they are recessed, so they must NOT be lifted. */
 
 [class*="bg-panel"]:not([class*="bg-panelAlt"]):not([class*="shadow-"]) {
-  box-shadow: var(--shadowMd);
+  box-shadow: var(--shadowCard);
+}
+/* Material depth: a 1px inset top highlight catches the "light" from above
+   and gives panels a machined edge — the difference between a flat box and
+   a raised surface. Light theme gets the same treatment (white cards catch
+   a soft top edge against the cream bg). */
+[class*="bg-panel"]:not([class*="bg-panelAlt"])::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(
+    to right,
+    rgb(var(--border-rgb) / 0),
+    rgb(var(--text-rgb) / 0.07),
+    rgb(var(--border-rgb) / 0)
+  );
+}
+/* Inset highlight needs the panel to be a positioning context. Only applied
+   with the same selector as the highlight itself so static panels never
+   shift. */
+[class*="bg-panel"]:not([class*="bg-panelAlt"]):not([class*="shadow-"]) {
+  position: relative;
+}
+/* Hover lift is opt-in via .card-interactive rather than global: most panels
+   are static containers, and lifting them on hover implies they are
+   clickable when they are not. */
+.card-interactive {
+  transition: box-shadow 150ms ease, transform 150ms ease, border-color 150ms ease;
+}
+.card-interactive:hover {
+  box-shadow: var(--shadowCardHover);
+  transform: translateY(-1px);
+}
+/* Interactive panels also gain a brass hairline on hover — the affordance
+   that says "clickable" in the same visual language as the focus ring. */
+.card-interactive:hover {
+  border-color: rgb(var(--brass-rgb) / 0.35);
 }
 
 ::-webkit-scrollbar {
@@ -150,7 +242,7 @@ body {
 }
 ::-webkit-scrollbar-thumb {
   background: var(--border);
-  border-radius: 0;
+  border-radius: var(--radius-md);
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--textFaint);
@@ -287,6 +379,101 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   [data-route] {
+    animation: none;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Page layout                                                                 */
+/* -------------------------------------------------------------------------- */
+/* One content shell for every page. Previously each page picked its own
+   width ad hoc (`max-w-[960px]`, `[1080px]`, `[1100px]`, `[1280px]`), so the
+   horizontal rhythm changed as you navigated. Use `.content-page` instead. */
+
+.content-page {
+  max-width: 1200px;
+  margin-inline: auto;
+  padding: 24px;
+}
+
+/* Narrow variant for form/settings-shaped pages. Two tiers, not eight. */
+.content-page-sm {
+  max-width: 900px;
+  margin-inline: auto;
+  padding: 24px;
+}
+
+/* Interactive surface affordance, opt-in (see .card-interactive above). */
+@media (prefers-reduced-motion: reduce) {
+  .card-interactive:hover {
+    transform: none;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Entrance stagger + chart draw-on                                            */
+/* -------------------------------------------------------------------------- */
+/* One-shot entrance motion. Containers opt in with data-stagger: their
+   direct children fade-rise in a 45ms cascade. Charts draw once on mount —
+   lines use pathLength="1" so the dash math is normalised regardless of
+   the real path length, and bars grow from the left baseline. Everything
+   here is disabled under prefers-reduced-motion.                            */
+
+[data-stagger] > * {
+  animation: stagger-in 360ms ease-out both;
+}
+[data-stagger] > *:nth-child(1) { animation-delay: 0ms; }
+[data-stagger] > *:nth-child(2) { animation-delay: 45ms; }
+[data-stagger] > *:nth-child(3) { animation-delay: 90ms; }
+[data-stagger] > *:nth-child(4) { animation-delay: 135ms; }
+[data-stagger] > *:nth-child(5) { animation-delay: 180ms; }
+[data-stagger] > *:nth-child(6) { animation-delay: 225ms; }
+[data-stagger] > *:nth-child(7) { animation-delay: 270ms; }
+[data-stagger] > *:nth-child(8) { animation-delay: 315ms; }
+[data-stagger] > *:nth-child(9) { animation-delay: 360ms; }
+[data-stagger] > *:nth-child(10) { animation-delay: 405ms; }
+[data-stagger] > *:nth-child(11) { animation-delay: 450ms; }
+[data-stagger] > *:nth-child(12) { animation-delay: 495ms; }
+
+@keyframes stagger-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.chart-line-draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: chart-line-draw 700ms ease-out forwards;
+}
+
+@keyframes chart-line-draw {
+  to { stroke-dashoffset: 0; }
+}
+
+.chart-area-in {
+  animation: chart-area-in 600ms ease-out 300ms both;
+}
+
+@keyframes chart-area-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.chart-bar-grow {
+  transform-origin: left center;
+  animation: chart-bar-grow 480ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+@keyframes chart-bar-grow {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-stagger] > *,
+  .chart-line-draw,
+  .chart-area-in,
+  .chart-bar-grow {
     animation: none;
   }
 }

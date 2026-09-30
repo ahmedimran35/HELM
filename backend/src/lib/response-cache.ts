@@ -53,13 +53,18 @@ function cacheScope(panelId: string | null, userId: string | null): string {
   return "global";
 }
 
-/** sha256 hex digest of (scope + normalised query). The scope prefix
- *  is what stops cross-panel + cross-user leakage — the bare text
- *  hash would collide for any caller that asks the same question. */
-export function hashQuery(query: string, panelId: string | null, userId: string | null): string {
+/** sha256 hex digest of the query, ownership scope, and request
+ *  variant. The variant prevents a cached search-enabled response from
+ *  replaying when the user switched search off or selected another model. */
+export function hashQuery(
+  query: string,
+  panelId: string | null,
+  userId: string | null,
+  variant = "default",
+): string {
   const scope = cacheScope(panelId, userId);
   return createHash("sha256")
-    .update(`${scope}\u0000${normaliseQuery(query)}`)
+    .update(`${scope}\u0000${variant}\u0000${normaliseQuery(query)}`)
     .digest("hex");
 }
 
@@ -68,9 +73,9 @@ export function hashQuery(query: string, panelId: string | null, userId: string 
 export async function lookupCached(
   query: string,
   panelId: string | null,
-  opts: { userId?: string | null; similarity_threshold?: number } = {},
+  opts: { userId?: string | null; similarity_threshold?: number; variant?: string } = {},
 ): Promise<CachedResponse | null> {
-  const hash = hashQuery(query, panelId, opts.userId ?? null);
+  const hash = hashQuery(query, panelId, opts.userId ?? null, opts.variant ?? "default");
   // The threshold is reserved for the future embedding path. For v1
   // we ignore it — every hash match is a hit, period.
   void opts.similarity_threshold;
@@ -105,9 +110,9 @@ export async function storeCached(
   response: string,
   model: string,
   panelId: string | null,
-  opts: { userId?: string | null } = {},
+  opts: { userId?: string | null; variant?: string } = {},
 ): Promise<void> {
-  const hash = hashQuery(query, panelId, opts.userId ?? null);
+  const hash = hashQuery(query, panelId, opts.userId ?? null, opts.variant ?? "default");
   // TTL is env-driven so tests can disable it. Default 1 hour — long
   // enough to suppress duplicate round-trips in a chat session, short
   // enough that a freshly-rotated provider key actually gets exercised.

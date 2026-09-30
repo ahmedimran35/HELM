@@ -182,7 +182,7 @@ export function SearchPage() {
       <header className="flex flex-col md:flex-row md:items-end gap-3 mb-6">
         <div className="flex-1 min-w-0">
           <div className="mono-caps text-[11px] text-textFaint">WORKSPACE / SEARCH</div>
-          <h1 className="font-display text-[28px] font-semibold tracking-tight text-text">
+          <h1 className="page-title">
             Search
           </h1>
           <p className="mt-1 text-[13px] text-textMuted max-w-[640px]">

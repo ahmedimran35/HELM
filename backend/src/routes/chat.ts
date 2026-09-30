@@ -98,6 +98,7 @@ router.post("/", rateLimit({ limit: 120, windowMs: 60_000, scope: "user" }), asy
     force_web_search?: boolean;
     url?: string;
     harness?: string;
+    panel_id?: string;
   };
   try {
     body = validate(await c.req.json().catch(() => ({})), {
@@ -107,6 +108,7 @@ router.post("/", rateLimit({ limit: 120, windowMs: 60_000, scope: "user" }), asy
       force_web_search: { type: "boolean" },
       url: { type: "string", minLength: 1, maxLength: 500 },
       harness: { type: "enum", values: ["openai", "anthropic", "mock", "pi", "cli"] },
+      panel_id: { type: "uuid" },
     });
   } catch (err) {
     const r = validationErrorResponse(err);
@@ -197,6 +199,24 @@ router.post("/", rateLimit({ limit: 120, windowMs: 60_000, scope: "user" }), asy
   // chat UI when they click Refresh). The bypass is per-request and
   // doesn't touch the stored row — subsequent identical queries can
   // still hit the cache.
+  // A reply is only reusable when every response-shaping input agrees.
+  // The old key used only (user + query), so switching model/harness,
+  // toggling live search off, or changing the system prompt replayed an
+  // unrelated cached response. Including these dimensions also makes all
+  // legacy cache rows miss automatically (they used variant="default").
+  const searchMode = body.force_web_search === true
+    ? "web:on"
+    : body.force_web_search === false
+      ? "web:off"
+      : "web:auto";
+  const cacheVariant = [
+    activeModelId,
+    activeModel.external_id,
+    activeHarnessKind,
+    searchMode,
+    body.system ?? "",
+  ].join("\u0000");
+
   const skipCache = (() => {
     try {
       const url = new URL(c.req.url);
@@ -207,7 +227,7 @@ router.post("/", rateLimit({ limit: 120, windowMs: 60_000, scope: "user" }), asy
   })();
   const cached = skipCache
     ? null
-    : await lookupCached(content, user.id).catch(() => null);
+     : await lookupCached(content, user.id, cacheVariant).catch(() => null);
   if (cached) {
     void logAudit({
       userId: user.id,
@@ -226,11 +246,11 @@ router.post("/", rateLimit({ limit: 120, windowMs: 60_000, scope: "user" }), asy
           VALUES (${user.id}::uuid, ${activeModelId}::uuid, 'assistant', ${cached.response_text}, ${tokens})
         `;
         await writeDone(stream, 0, tokens);
-      } catch (err) {
-        rawConsole.warn("[chat] cache replay failed:", (err as Error).message);
-        await writeError(stream);
-      }
-    });
+       } catch (err) {
+         rawConsole.warn("[chat] cache replay failed:", (err as Error).message);
+         await writeError(stream);
+       }
+     });
   }
 
   // Persist the user message audit row — the user row itself was
@@ -313,31 +333,23 @@ router.post("/", rateLimit({ limit: 120, windowMs: 60_000, scope: "user" }), asy
       assembled = streamText;
       promptTokens = pt;
       completionTokens = ct;
-      // Canonical Sources injection. See lib/chat/sources-injection.ts:
-      // it computes the exact delta (plus any trailing replacement) that
-      // takes the model's raw streamed text to a single, complete,
-      // bottom-anchored Sources list. The client applies
-      // `content.slice(0, len - replaced_length) + delta`.
-      const injection = planSourcesInjection(assembled, searchSources);
-      if (injection.delta !== null) {
-        assembled = injection.text;
-        await stream.writeSSE({
-          event: "token",
-          data: JSON.stringify({
-            delta: injection.delta,
-            ...(injection.replacedLength > 0
-              ? { replaced_length: injection.replacedLength }
-              : {}),
-          }),
-        });
+      // Some harnesses omit the prompt-token count on the done chunk.
+      // Fall back to a chars/4 estimate so the perf dashboard doesn't
+      // show 0-token runs (which also skew cost = 0).
+      if (!promptTokens) {
+        const promptChars = messages.reduce((n, m) => n + (m.content?.length ?? 0), 0);
+        promptTokens = Math.max(1, Math.ceil(promptChars / 4));
       }
-      // Detect "sources-only" responses — the model returned only the
-      // Sources section without a lead sentence, which is what happens
-      // when the model is hardcoded to dump links for a greeting. If
-      // we let that through, the user sees a list of URLs and reads
-      // it as "the AI didn't respond". Strip the Sources section and
-      // re-query the model WITHOUT the search context so the model
-      // produces a real answer.
+      // Sources handling — must run in this order:
+      // 1. Detect sources-only BEFORE injecting anything. The raw model
+      //    output might be "Hi\n\n## Sources\n- ..." — if the body
+      //    (everything before Sources) is < 20 chars, we need to
+      //    re-query WITHOUT search so the model produces a real answer.
+      // 2. Only if no refetch happened do we inject the canonical Sources
+      //    block. The refetch path already handles its own Sources
+      //    injection (sources-only.ts), so injecting twice would show
+      //    duplicate blocks.
+      let refetched = false;
       if (isSourcesOnlyResponse(assembled) && searchSources.length > 0) {
         const refetch = await refetchIfSourcesOnly(
           {
@@ -355,6 +367,22 @@ router.post("/", rateLimit({ limit: 120, windowMs: 60_000, scope: "user" }), asy
           assembled = refetch.assembled;
           if (typeof refetch.promptTokens === "number") promptTokens = refetch.promptTokens;
           if (typeof refetch.completionTokens === "number") completionTokens = refetch.completionTokens;
+          refetched = true;
+        }
+      }
+      if (!refetched) {
+        const injection = planSourcesInjection(assembled, searchSources);
+        if (injection.delta !== null) {
+          assembled = injection.text;
+          await stream.writeSSE({
+            event: "token",
+            data: JSON.stringify({
+              delta: injection.delta,
+              ...(injection.replacedLength > 0
+                ? { replaced_length: injection.replacedLength }
+                : {}),
+            }),
+          });
         }
       }
       // Persist the assistant message.
@@ -391,9 +419,11 @@ router.post("/", rateLimit({ limit: 120, windowMs: 60_000, scope: "user" }), asy
         assembled,
         promptTokens,
         completionTokens: tokens,
-        latencyMs,
-        assistantMessageId,
-      });
+         latencyMs,
+         assistantMessageId,
+         cacheVariant,
+         panelId: body.panel_id,
+       });
 
       await writeDone(stream, promptTokens ?? 0, tokens);
     } catch (err) {
@@ -408,8 +438,12 @@ router.post("/", rateLimit({ limit: 120, windowMs: 60_000, scope: "user" }), asy
         externalId: activeModel.external_id,
         latencyMs,
         errorMessage: (err as Error).message ?? "unknown",
+        panelId: body.panel_id,
       });
-      await writeError(stream);
+      const publicError = (err as Error).message?.includes("empty response")
+        ? "The selected model returned no response. The provider may expose the model for listing but not support chat generation."
+        : "The model request failed. Check the provider/model configuration.";
+      await writeError(stream, publicError);
     } finally {
       stopHeartbeat();
     }

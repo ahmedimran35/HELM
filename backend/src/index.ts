@@ -19,12 +19,12 @@ import providerRoutes from "./routes/providers.ts";
 import modelRoutes from "./routes/models.ts";
 import accessRoutes from "./routes/access.ts";
 import chatRoutes from "./routes/chat.ts";
+import swarmRoutes from "./routes/swarm.ts";
 import panelRoutes from "./routes/panels.ts";
 import userRoutes from "./routes/users.ts";
 import logsRoutes from "./routes/logs.ts";
 import workspaceRoutes from "./routes/workspace.ts";
 import personaRoutes from "./routes/personas.ts";
-import integrationRoutes from "./routes/integrations.ts";
 import { skillsRouter, packsRouter } from "./routes/skills.ts";
 import quotaRoutes from "./routes/quotas.ts";
 import harnessRoutes from "./routes/harness.ts";
@@ -34,13 +34,10 @@ import { securityHeaders, originGuard } from "./middleware/security-headers.ts";
 import { requestMetrics } from "./middleware/metrics.ts";
 import webSearchRoutes from "./routes/websearch.ts";
 import searchRoutes from "./routes/search.ts";
-import memoryStrategyRoutes from "./routes/memory-strategies.ts";
-import { startMemoryScheduler } from "./lib/memory-strategies/scheduler.ts";
 import watchRoutes from "./routes/watches.ts";
 import { startWatchScheduler } from "./lib/watches.ts";
 import workflowRoutes from "./routes/workflows.ts";
 import oauthRoutes from "./routes/oauth.ts";
-import slackRoutes from "./routes/slack.ts";
 import appRoutes from "./routes/apps.ts";
 import appInstallsRoutes, { appInstallsIdRouter } from "./routes/app-installs.ts";
 import appDataRoutes from "./routes/app-data.ts";
@@ -54,17 +51,13 @@ import { pruneStale as prunePresenceStale } from "./lib/presence.ts";
 import { startAutoSummarizeScheduler } from "./lib/auto-summarize.ts";
 import { startAuditRetention } from "./lib/audit-retention.ts";
 import { startCacheRetention } from "./lib/cache-retention.ts";
-import statusRoutes from "./routes/status.ts";
 import comboRoutes from "./routes/combo.ts";
 // Tier 3 — Voice + Multimodal
 import filesRoutes from "./routes/files.ts";
-import voiceRoutes from "./routes/voice.ts";
-import browserRoutes from "./routes/browser.ts";
 import documentsRoutes from "./routes/documents.ts";
 
 // Tier 4 — Discovery: marketplace, knowledge graph, smart notifications.
 import marketplaceRoutes from "./routes/marketplace.ts";
-import knowledgeGraphRoutes from "./routes/knowledge-graph.ts";
 import {
   notificationRouter,
   preferencesRouter,
@@ -113,7 +106,6 @@ const ORIGIN_GUARD_SKIP = new Set([
   "/api/login",
   "/api/bootstrap-status",
   "/api/setup/complete",
-  "/api/slack/events",
   "/api/csp-report",
   "/api/csp-report/",
 ]);
@@ -156,9 +148,7 @@ app.notFound((c) => {
     "/api/providers":                   ["GET", "POST"],
     "/api/users":                       ["GET", "POST"],
     "/api/models":                       ["GET", "POST"],
-    "/api/integrations":                ["GET", "POST"],
     "/api/workspace/memory":            ["GET", "POST"],
-    "/api/memory/strategies":              ["GET", "POST", "PATCH", "DELETE"],
     "/api/workspace/files":             ["GET", "POST"],
     "/api/workspace/sandbox":           ["GET"],
     "/api/workspace/keychain":          ["GET"],
@@ -177,14 +167,10 @@ app.notFound((c) => {
     "/api/workflow-templates":          ["GET"],
     "/api/oauth/accounts":              ["GET"],
     "/api/oauth/callback":              ["GET"],
-    "/api/slack/install":               ["GET"],
-    "/api/slack/install/callback":      ["POST"],
-    "/api/slack/installs":              ["GET"],
     "/api/apps":                        ["GET", "POST"],
     "/api/apps/bootstrap":              ["GET"],
     "/api/apps/generate":               ["POST"],
     "/apps-embed":                      ["GET"],
-    "/api/slack/events":                ["GET", "POST"],
     "/api/sandbox/sessions":            ["GET", "POST"],
     "/api/sandbox/files":               ["POST"],
     "/api/skills":                      ["GET", "POST"],
@@ -200,9 +186,6 @@ app.notFound((c) => {
     "/api/health/harnesses":            ["GET"],
     // Tier 3 — Voice + Multimodal
     "/api/files":                       ["GET", "POST"],
-    "/api/voice":                       ["GET", "POST"],
-    "/api/browser/status":              ["GET"],
-    "/api/browser/exec":                ["POST"],
     "/api/documents":                   ["GET", "POST"],
     "/api/documents/generate":          ["POST"],
   };
@@ -443,6 +426,9 @@ app.route("/api/access-requests", accessRoutes);
 // 1:1 chat (streaming)
 app.route("/api/chat", chatRoutes);
 
+// Agents Swarm Lab (experimental, admin-only)
+app.route("/api/swarm", swarmRoutes);
+
 // Panels CRUD + members + knowledge
 app.route("/api/panels", panelRoutes);
 
@@ -457,9 +443,6 @@ app.route("/api/workspace", workspaceRoutes);
 
 // Personas — Phase 4
 app.route("/api/personas", personaRoutes);
-
-// Integrations (webhooks) — Phase 5
-app.route("/api/integrations", integrationRoutes);
 
 // Skills + skill packs (qm-parity P3)
 app.route("/api/skills", skillsRouter);
@@ -479,9 +462,6 @@ app.route("/api/harnesses", harnessRoutes);
 
 // OAuth (P5) — identity linking for Google / GitHub / Microsoft.
 app.route("/api/oauth", oauthRoutes);
-
-// Slack-native inbound (P5) — install + event webhook + audit list.
-app.route("/api/slack", slackRoutes);
 
 // Watches + triggers + webhook receiver (P4) — event-driven background
 // work layered on top of the existing crons system.
@@ -508,9 +488,6 @@ app.route("/api/app-data", appDataRoutes);
 app.route("/apps", appsBundlesRoutes);       // public — SPA-style bundles
 app.route("/", appsEmbedRouter);             // public — /apps-embed chrome
 
-// Pluggable memory strategy administration and summaries.
-app.route("/api/memory", memoryStrategyRoutes);
-
 // Tier 1 co-pilot: inline approval gates (agent pauses, human clicks
 // approve / deny). Wired after auth so the handler can resolve user.
 app.route("/api/approvals", approvalRoutes);
@@ -525,13 +502,8 @@ app.route("/api/combo", comboRoutes);
 // still receive the completion POST.
 app.route("/api/setup", setupRoutes);
 
-// Tier 7 status — admin-only deep health snapshot.
-app.route("/api/status", statusRoutes);
-
 // Tier 3 — Voice + Multimodal
 app.route("/api/files", filesRoutes);
-app.route("/api/voice", voiceRoutes);
-app.route("/api/browser", browserRoutes);
 app.route("/api/documents", documentsRoutes);
 
 // Tier 5 — cost + performance: cache, spend caps, perf dashboard.
@@ -578,7 +550,6 @@ app.route("/api/feedback", feedbackRoutes);
 
 // Tier 4 — Discovery (marketplace, knowledge graph, notifications).
 app.route("/api/marketplace", marketplaceRoutes);
-app.route("/api/kg", knowledgeGraphRoutes);
 app.route("/api/notifications", notificationRouter);
 app.route("/api/notification-preferences", preferencesRouter);
 
@@ -594,7 +565,6 @@ async function main(): Promise<void> {
   // Start the watch scheduler after migrations + auth so it can read
   // watches safely. Idempotent.
   startWatchScheduler();
-  startMemoryScheduler();
   // Tier 1 co-pilot: background sweeper flips stale approval requests
   // to 'expired' once their 15-minute window passes. Idempotent.
   startApprovalSweeper();

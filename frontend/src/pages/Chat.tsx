@@ -8,10 +8,9 @@
 //   - "live web" toggle is icon-only with a clear on/off state.
 //   - Empty thread uses the EmptyState illustration instead of plain
 //     centered text.
-//   - Tier 3 — Voice + Multimodal: input toolbar (voice · attach ·
-//     browse · doc) plus attachment chips above the textarea. The
-//     toolbar opens a SideSheet per capability; the resulting data
-//     feeds into the next message.
+//   - Multimodal: input toolbar (attach · doc) plus attachment chips
+//     above the textarea. The toolbar opens a SideSheet per capability;
+//     the resulting data feeds into the next message.
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useAuth } from "../auth/AuthContext";
@@ -41,8 +40,6 @@ import { EmptyState } from "../components/ui/feedback/EmptyState";
 import { StatusPill } from "../components/ui/feedback/StatusPill";
 import { useToast } from "../components/ui/feedback/Toast";
 import { FileDrop, type UploadedFile } from "../components/ui/data/FileDrop";
-import { VoiceRecorder } from "../components/system/VoiceRecorder";
-import { BrowserAutomation, type BrowserResult } from "../components/system/BrowserAutomation";
 import {
   SearchIcon,
   ZapIcon,
@@ -51,16 +48,24 @@ import {
   CheckIcon,
   AlertTriangleIcon,
   PaperclipIcon,
-  MicIcon,
-  GlobeIcon,
   DocumentIcon,
   XIcon,
   DownloadIcon,
   RefreshIcon,
-  ThumbsUpIcon,
-  ThumbsDownIcon,
 } from "../components/ui/Icon";
 import { cn } from "../lib/cn";
+
+// Client-side pagination for the chat model picker.
+const MODEL_PAGE_SIZE = 10;
+
+function pagedModels(models: ModelRow[], page: number): { pageModels: ModelRow[]; totalPages: number } {
+  const totalPages = Math.max(1, Math.ceil(models.length / MODEL_PAGE_SIZE));
+  const p = Math.min(page, totalPages);
+  return {
+    pageModels: models.slice((p - 1) * MODEL_PAGE_SIZE, p * MODEL_PAGE_SIZE),
+    totalPages,
+  };
+}
 
 interface ModelRow extends Pick<Model, "id" | "display_name" | "external_id" | "assigned" | "pending_request"> {}
 
@@ -108,20 +113,15 @@ export function ChatPage() {
   // keep working until they pick a different harness.
   const [harnesses, setHarnesses] = useState<HarnessInfo[]>([]);
   const [harness, setHarness] = useState<HarnessKind>("openai");
-  // Tier 3 — Voice + Multimodal state. `attachments` are file blobs
-  // uploaded via FileDrop; `pendingVoice` is set when the user records
-  // audio but hasn't confirmed the send yet; `pendingBrowser` carries
-  // the latest browser automation result so it can be appended to the
-  // next message as context.
+  // Multimodal state. `attachments` are file blobs uploaded via
+  // FileDrop and appended to the next message as context.
   const [attachments, setAttachments] = useState<UploadedFile[]>([]);
-  const [pendingVoice, setPendingVoice] = useState<string | null>(null);
-  const [pendingBrowser, setPendingBrowser] = useState<BrowserResult | null>(null);
   const [showFileDrop, setShowFileDrop] = useState(false);
-  const [showVoice, setShowVoice] = useState(false);
-  const [showBrowser, setShowBrowser] = useState(false);
   const [showDocGen, setShowDocGen] = useState(false);
   const [refreshMode, setRefreshMode] = useState(false);
   const [showAllHarnesses, setShowAllHarnesses] = useState(false);
+  const [modelPage, setModelPage] = useState(1);
+  const [modelSearch, setModelSearch] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const sendStartRef = useRef<number>(0);
@@ -239,6 +239,11 @@ export function ChatPage() {
 
   if (!user) return null;
   const activeModel = models.find((m) => m.id === active);
+  const filteredModels = modelSearch.trim()
+    ? models.filter((m) => m.display_name.toLowerCase().includes(modelSearch.trim().toLowerCase()))
+    : models;
+  const { pageModels, totalPages } = pagedModels(filteredModels, modelPage);
+  const assignedCount = models.filter((m) => m.assigned).length;
 
   async function requestAccess(modelId: string) {
     try {
@@ -267,12 +272,11 @@ export function ChatPage() {
 
   async function send() {
     if (!active || streaming) return;
-    // Compose the user-visible content. We append voice transcripts,
-    // browser extracts, and file descriptions so the model sees the
-    // multimodal context inline. The original typed text is always the
-    // first line so the user can still quote exactly what they typed.
+    // Compose the user-visible content. We append file descriptions so
+    // the model sees the attachment context inline. The original typed
+    // text is always the first line so the user can still quote exactly
+    // what they typed.
     const typed = input.trim();
-    const voicePart = pendingVoice ? `\n[voice transcript]\n${pendingVoice}` : "";
     const attachParts: string[] = [];
     for (const a of attachments) {
       if (a.description) attachParts.push(`- ${a.name}: ${a.description}`);
@@ -281,14 +285,7 @@ export function ChatPage() {
     const attachBlock = attachParts.length
       ? `\n[attachments]\n${attachParts.join("\n")}`
       : "";
-    const browserBlock = pendingBrowser
-      ? `\n[browser result @ ${pendingBrowser.finalUrl}]\n` +
-        `title: ${pendingBrowser.title}\n` +
-        Object.entries(pendingBrowser.extracted)
-          .map(([sel, vals]) => `${sel}: ${vals.join(" | ")}`)
-          .join("\n")
-      : "";
-    const composed = [typed, voicePart, attachBlock, browserBlock]
+    const composed = [typed, attachBlock]
       .filter(Boolean)
       .join("");
     if (!composed.trim()) return;
@@ -299,8 +296,6 @@ export function ChatPage() {
     setRefreshMode(false);
     setError(null);
     setAttachments([]);
-    setPendingVoice(null);
-    setPendingBrowser(null);
     setMessages((prev) => [...prev, { role: "user", content: typed }]);
     setStreaming(true);
     sendStartRef.current = Date.now();
@@ -362,6 +357,23 @@ export function ChatPage() {
             if (!payload) continue;
             try {
               const ev = JSON.parse(payload);
+              if (ev.error) {
+                const message = typeof ev.error.message === "string"
+                  ? ev.error.message
+                  : "The model returned no response. Check the provider/model configuration.";
+                setError(message);
+                setMessages((prev) => {
+                  const last = prev[prev.length - 1];
+                  return last?.role === "assistant" && !last.content ? prev.slice(0, -1) : prev;
+                });
+                toast.addToast({
+                  id: `chat-error-${Date.now()}`,
+                  title: "Model request failed",
+                  description: message,
+                  tone: "warning",
+                  duration: 5000,
+                });
+              }
               if (ev.cached) {
                 // Mark the assistant message as coming from cache.
                 // Tier 5 — response_cache surfaced an exact-match hit.
@@ -472,7 +484,7 @@ export function ChatPage() {
         <div className="px-3 py-2 border-b border-borderSoft flex items-center gap-2">
           <span className="mono-caps text-[10px] text-textMuted flex-1">Models</span>
           <span className="mono-caps text-[10px] text-textFaint tabular-nums">
-            {models.filter((m) => m.assigned).length}/{models.length}
+            {assignedCount}/{models.length}
           </span>
         </div>
         {/* Harness pill row — P2 pluggable runtime selector. Shows the
@@ -539,8 +551,21 @@ export function ChatPage() {
             </button>
           )}
         </div>
-        <div className="py-1">
-          {models.map((m) => {
+        <div className="px-2 py-2 border-b border-borderSoft">
+          <Input
+            value={modelSearch}
+            onChange={(e) => {
+              setModelSearch(e.target.value);
+              setModelPage(1);
+            }}
+            placeholder="filter models…"
+            aria-label="Filter models"
+            name="model-filter"
+            className="h-8 text-[11px]"
+          />
+        </div>
+        <div className="min-h-0 max-h-[calc(100vh-245px)] overflow-y-auto py-1">
+          {pageModels.map((m) => {
             const isActive = m.id === active;
             const state = m.assigned
               ? "healthy"
@@ -571,32 +596,61 @@ export function ChatPage() {
               </button>
             );
           })}
-          {user.role === "user" &&
-            models.some((m) => !m.assigned && !m.pending_request) && (
-              <div className="mt-4 mx-3 pt-3 border-t border-borderSoft">
-                <div className="mono-caps text-[10px] text-textFaint mb-2">
-                  request access
-                </div>
-                {models
-                  .filter((m) => !m.assigned && !m.pending_request)
-                  .map((m) => (
-                    <button
-                      key={`req-${m.id}`}
-                      onClick={() => requestAccess(m.id)}
-                      className="w-full flex items-center gap-2 text-left px-2 py-1.5 mb-1 border border-dashed border-borderSoft hover:border-brass hover:bg-brass/5 text-textMuted hover:text-brass transition-colors"
-                    >
-                      <span className="font-mono text-[11px] text-brass">+</span>
-                      <span className="font-mono text-[11px] truncate flex-1">
-                        {m.display_name}
-                      </span>
-                      <span className="font-mono text-[9px] text-textFaint">
-                        request
-                      </span>
-                    </button>
-                  ))}
-              </div>
-            )}
+          {filteredModels.length === 0 && (
+            <p className="px-3 py-4 text-center font-mono text-[11px] text-textFaint">
+              no matching models
+            </p>
+          )}
         </div>
+        {totalPages > 1 && (
+          <div className="px-3 py-2 border-t border-borderSoft flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setModelPage((p) => Math.max(1, p - 1))}
+              disabled={modelPage <= 1}
+              className="h-6 px-2 border border-borderSoft font-mono text-[10px] text-textMuted hover:text-text hover:border-brass/40 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              prev
+            </button>
+            <span className="flex-1 text-center font-mono text-[10px] text-textFaint tabular-nums">
+              {Math.min(modelPage, totalPages)} / {totalPages}
+            </span>
+            <button
+              type="button"
+              onClick={() => setModelPage((p) => Math.min(totalPages, p + 1))}
+              disabled={modelPage >= totalPages}
+              className="h-6 px-2 border border-borderSoft font-mono text-[10px] text-textMuted hover:text-text hover:border-brass/40 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              next
+            </button>
+          </div>
+        )}
+        {user.role === "user" &&
+          models.some((m) => !m.assigned && !m.pending_request) && (
+            <div className="mx-3 my-3 pt-3 border-t border-borderSoft max-h-40 overflow-y-auto">
+              <div className="mono-caps text-[10px] text-textFaint mb-2">
+                request access
+              </div>
+              {models
+                .filter((m) => !m.assigned && !m.pending_request)
+                .slice(0, MODEL_PAGE_SIZE)
+                .map((m) => (
+                  <button
+                    key={`req-${m.id}`}
+                    onClick={() => requestAccess(m.id)}
+                    className="w-full flex items-center gap-2 text-left px-2 py-1.5 mb-1 border border-dashed border-borderSoft hover:border-brass hover:bg-brass/5 text-textMuted hover:text-brass transition-colors"
+                  >
+                    <span className="font-mono text-[11px] text-brass">+</span>
+                    <span className="font-mono text-[11px] truncate flex-1">
+                      {m.display_name}
+                    </span>
+                    <span className="font-mono text-[9px] text-textFaint">
+                      request
+                    </span>
+                  </button>
+                ))}
+            </div>
+          )}
       </aside>
 
       {/* Right column: thread */}
@@ -691,26 +745,16 @@ export function ChatPage() {
         <div className="border-t border-border bg-bg p-3">
           <InputToolbar
             onAttach={() => setShowFileDrop(true)}
-            onVoice={() => setShowVoice(true)}
-            onBrowse={() => setShowBrowser(true)}
             onDoc={() => setShowDocGen(true)}
             disabled={!activeModel || streaming}
-            counts={{
-              attachments: attachments.length,
-              voice: pendingVoice ? 1 : 0,
-              browser: pendingBrowser ? 1 : 0,
-            }}
+            counts={{ attachments: attachments.length }}
           />
-          {(attachments.length > 0 || pendingVoice || pendingBrowser) && (
+          {attachments.length > 0 && (
             <AttachmentChips
               attachments={attachments}
               onRemoveAttachment={(id) =>
                 setAttachments((prev) => prev.filter((a) => a.id !== id))
               }
-              voice={pendingVoice}
-              onClearVoice={() => setPendingVoice(null)}
-              browser={pendingBrowser}
-              onClearBrowser={() => setPendingBrowser(null)}
             />
           )}
           <div className="flex items-end gap-2">
@@ -747,7 +791,7 @@ export function ChatPage() {
               disabled={
                 !activeModel ||
                 streaming ||
-                (!input.trim() && attachments.length === 0 && !pendingVoice && !pendingBrowser)
+                (!input.trim() && attachments.length === 0)
               }
               className="gap-1.5"
             >
@@ -770,7 +814,7 @@ export function ChatPage() {
             >
               <TypingDots size="sm" active />
               <span className="mono-caps tracking-wider">thinking</span>
-              <span className="text-brass/60 ml-auto mono-caps text-[10px]">
+              <span className="text-brass ml-auto mono-caps text-[10px]">
                 waiting for response
               </span>
             </div>
@@ -794,34 +838,6 @@ export function ChatPage() {
               ? `described · ${f.description.slice(0, 60)}${f.description.length > 60 ? "…" : ""}`
               : `${(f.byte_size / 1024).toFixed(1)} KB`,
             tone: "success",
-          });
-        }}
-      />
-      <VoiceRecorder
-        open={showVoice}
-        onClose={() => setShowVoice(false)}
-        onTranscript={(text) => {
-          setPendingVoice(text);
-          setShowVoice(false);
-          toast.addToast({
-            id: "chat-voice",
-            title: "Voice transcript captured",
-            description: `${text.length} chars · will be sent with your next message`,
-            tone: "success",
-          });
-        }}
-      />
-      <BrowserAutomation
-        open={showBrowser}
-        onClose={() => setShowBrowser(false)}
-        onResult={(r) => {
-          setPendingBrowser(r);
-          setShowBrowser(false);
-          toast.addToast({
-            id: "chat-browser",
-            title: `Browser · ${r.title || r.finalUrl}`,
-            description: `${(r.duration_ms / 1000).toFixed(1)}s · ${Object.keys(r.extracted).length} extracts`,
-            tone: r.stub ? "warning" : "success",
           });
         }}
       />
@@ -987,7 +1003,6 @@ function MessageBubble({
             service={m.search?.service ?? "search"}
           />
         )}
-        {isAssistant && !stillStreaming && <FeedbackRow messageId={m.id} />}
       </div>
       {isUser && (
         <div className="pt-1">
@@ -1019,12 +1034,6 @@ function MessageMeta({ message }: { message: Message }) {
         <span className="inline-flex items-center gap-1 text-teal border border-teal/40 px-1.5 h-[16px]">
           <CheckIcon size={9} />
           cached{message.cachedModel ? ` · ${message.cachedModel}` : ""}
-        </span>
-      )}
-      {!message.search && !message.cached && (
-        <span className="inline-flex items-center gap-1 text-teal">
-          <CheckIcon size={9} />
-          cached model
         </span>
       )}
     </span>
@@ -1134,168 +1143,18 @@ function TurnCostChip() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// FeedbackRow — Tier 6 + Tier 7 combo (self-test + feedback). Thumbs-
-// up / thumbs-down buttons under each assistant message. Thumbs-down
-// surfaces an optional reason input and fires the self-test re-run
-// automatically. A toast confirms the vote.
-// ─────────────────────────────────────────────────────────────────────
-
-interface FeedbackResult {
-  passed: boolean;
-  checks: Array<{ name: string; passed: boolean; note?: string }>;
-}
-
-function FeedbackRow({
-  messageId,
-}: {
-  messageId: string | undefined;
-}) {
-  const toast = useToast();
-  const [rating, setRating] = useState<"up" | "down" | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [askingReason, setAskingReason] = useState(false);
-  const [reason, setReason] = useState("");
-  const [result, setResult] = useState<FeedbackResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  if (!messageId) return null;
-
-  async function rate(r: "up" | "down", reasonText?: string) {
-    if (!messageId) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      const resp = await apiPost<{ ok: boolean; rerun: FeedbackResult | null }>(
-        "/combo/feedback",
-        { message_id: messageId, rating: r, reason: reasonText ?? null },
-      );
-      setRating(r);
-      if (r === "down" && resp.rerun) setResult(resp.rerun);
-      toast.addToast({
-        id: `fb-${messageId}-${Date.now()}`,
-        title:
-          r === "up"
-            ? "Thanks — we'll favour this kind of reply"
-            : "Thanks — we'll learn from this",
-        description:
-          r === "down"
-            ? "Optional reason helps the preference learner."
-            : undefined,
-        tone: r === "up" ? "success" : "info",
-        duration: 2500,
-      });
-    } catch (err) {
-      const msg = (err as Error).message;
-      setError(msg);
-      toast.addToast({
-        id: `chat-feedback-err-${messageId}`,
-        title: "Feedback failed",
-        description: msg,
-        tone: "warning",
-        duration: 3500,
-      });
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <div className="mt-2 space-y-1.5">
-      <div className="flex items-center gap-2 flex-wrap">
-        <button
-          type="button"
-          onClick={() => void rate("up")}
-          disabled={submitting || rating !== null}
-          aria-pressed={rating === "up"}
-          className={cn(
-            "mono-caps text-[10px] tracking-wider px-2 h-6 border transition-colors inline-flex items-center gap-1",
-            rating === "up"
-              ? "border-teal/60 bg-teal/10 text-teal"
-              : "border-border text-textMuted hover:text-text hover:border-borderSoft",
-          )}
-        >
-          <ThumbsUpIcon size={9} />
-          helpful
-        </button>
-        <button
-          type="button"
-          onClick={() => setAskingReason(true)}
-          disabled={submitting || rating !== null}
-          aria-pressed={rating === "down"}
-          className={cn(
-            "mono-caps text-[10px] tracking-wider px-2 h-6 border transition-colors inline-flex items-center gap-1",
-            rating === "down"
-              ? "border-rust/60 bg-rust/10 text-rust"
-              : "border-border text-textMuted hover:text-text hover:border-borderSoft",
-          )}
-        >
-          <ThumbsDownIcon size={9} />
-          not helpful
-        </button>
-        {result && (
-          <span
-            className={cn(
-              "mono-caps text-[10px] tracking-wider px-2 h-6 border inline-flex items-center gap-1",
-              result.passed
-                ? "border-teal/40 text-teal"
-                : "border-rust/40 text-rust",
-            )}
-            title={result.checks
-              .map((c) => `${c.passed ? "✓" : "✗"} ${c.name}`)
-              .join("\n")}
-          >
-            self-test: {result.passed ? "passed" : "flagged"}
-          </span>
-        )}
-        {error && (
-          <Badge tone="rust">{error}</Badge>
-        )}
-      </div>
-      {askingReason && rating === null && (
-        <div className="flex items-center gap-1.5 max-w-[480px]">
-          <input
-            type="text"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            placeholder="what went wrong? (optional)"
-            className="flex-1 bg-bg border border-border text-text px-2 py-1 font-mono text-[11px] outline-none focus:border-rust/60"
-            autoFocus
-          />
-          <button
-            type="button"
-            onClick={() => void rate("down", reason.trim() || undefined)}
-            disabled={submitting}
-            className="mono-caps text-[10px] tracking-wider px-2 h-6 border border-rust/40 bg-rust/10 text-rust hover:bg-rust/20"
-          >
-            submit
-          </button>
-          <button
-            type="button"
-            onClick={() => setAskingReason(false)}
-            className="mono-caps text-[10px] tracking-wider px-2 h-6 border border-borderSoft text-textMuted hover:text-rust"
-          >
-            cancel
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ============================================================================
-// Tier 3 — Voice + Multimodal helper components
+// Input toolbar + attachment chips
 // ============================================================================
 
 interface InputToolbarProps {
   onAttach: () => void;
-  onVoice: () => void;
-  onBrowse: () => void;
   onDoc: () => void;
   disabled?: boolean;
-  counts: { attachments: number; voice: number; browser: number };
+  counts: { attachments: number };
 }
 
-function InputToolbar({ onAttach, onVoice, onBrowse, onDoc, disabled, counts }: InputToolbarProps) {
+function InputToolbar({ onAttach, onDoc, disabled, counts }: InputToolbarProps) {
   const buttons: Array<{
     onClick: () => void;
     label: string;
@@ -1303,9 +1162,7 @@ function InputToolbar({ onAttach, onVoice, onBrowse, onDoc, disabled, counts }: 
     badge?: number;
     title: string;
   }> = [
-    { onClick: onVoice, label: "voice", icon: <MicIcon size={12} />, badge: counts.voice, title: "voice → transcript" },
     { onClick: onAttach, label: "attach", icon: <PaperclipIcon size={12} />, badge: counts.attachments, title: "attach file" },
-    { onClick: onBrowse, label: "browse", icon: <GlobeIcon size={12} />, badge: counts.browser, title: "browse the web" },
     { onClick: onDoc, label: "doc", icon: <DocumentIcon size={12} />, title: "generate document" },
   ];
   return (
@@ -1341,19 +1198,11 @@ function InputToolbar({ onAttach, onVoice, onBrowse, onDoc, disabled, counts }: 
 interface AttachmentChipsProps {
   attachments: UploadedFile[];
   onRemoveAttachment: (id: string) => void;
-  voice: string | null;
-  onClearVoice: () => void;
-  browser: BrowserResult | null;
-  onClearBrowser: () => void;
 }
 
 function AttachmentChips({
   attachments,
   onRemoveAttachment,
-  voice,
-  onClearVoice,
-  browser,
-  onClearBrowser,
 }: AttachmentChipsProps) {
   return (
     <div className="flex flex-wrap gap-1.5 mb-2">
@@ -1375,34 +1224,6 @@ function AttachmentChips({
           </button>
         </span>
       ))}
-      {voice && (
-        <span className="inline-flex items-center gap-1 mono-caps text-[10px] tracking-wider px-1.5 h-[22px] border border-teal/40 bg-teal/10 text-teal">
-          <MicIcon size={10} />
-          voice · {voice.length}c
-          <button
-            type="button"
-            aria-label="Clear voice"
-            onClick={onClearVoice}
-            className="text-teal hover:text-rust"
-          >
-            <XIcon size={10} />
-          </button>
-        </span>
-      )}
-      {browser && (
-        <span className="inline-flex items-center gap-1 mono-caps text-[10px] tracking-wider px-1.5 h-[22px] border border-brassSoft/40 bg-brassSoft/10 text-text">
-          <GlobeIcon size={10} />
-          {browser.title || browser.finalUrl}
-          <button
-            type="button"
-            aria-label="Clear browser result"
-            onClick={onClearBrowser}
-            className="text-text hover:text-rust"
-          >
-            <XIcon size={10} />
-          </button>
-        </span>
-      )}
     </div>
   );
 }

@@ -37,9 +37,9 @@ export function RequestsPage() {
   // pending/decided with the normal content.
   if (rows === null) {
     return (
-      <div className="p-6 max-w-[900px] space-y-6">
+      <div className="content-page-sm space-y-6">
         <div>
-          <h2 className="font-display text-[20px] font-semibold text-text tracking-wide">
+          <h2 className="page-title">
             Requests
           </h2>
           <div className="text-textMuted text-[13px]">
@@ -62,9 +62,9 @@ export function RequestsPage() {
   const decided = rows.filter((r) => r.status !== "pending");
 
   return (
-    <div className="p-6 max-w-[900px] space-y-6">
+    <div className="content-page-sm space-y-6">
       <div>
-        <h2 className="font-display text-[20px] font-semibold text-text tracking-wide">
+        <h2 className="page-title">
           Requests
         </h2>
         <div className="text-textMuted text-[13px]">

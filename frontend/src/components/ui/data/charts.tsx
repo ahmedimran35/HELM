@@ -20,6 +20,7 @@
 
 import { useId, type CSSProperties, type ReactNode } from "react";
 import { cn } from "../../../lib/cn";
+import { CountUp } from "../../../lib/useCountUp";
 
 // ─────────────────────────────────────────────────────────────────────
 // Sparkline
@@ -110,6 +111,8 @@ export function Sparkline({
         strokeWidth={1.5}
         strokeLinecap="round"
         strokeLinejoin="round"
+        pathLength={1}
+        className="chart-line-draw"
       />
       {/* Last-value dot */}
       <circle
@@ -185,8 +188,8 @@ export function BarChart({
             </div>
             <div className="flex-1 relative h-[18px] bg-panel border border-borderSoft">
               <div
-                className={cn("absolute inset-y-0 left-0", BAR_TONE_BG[tone])}
-                style={{ width: `${pct}%` }}
+                className={cn("absolute inset-y-0 left-0 chart-bar-grow", BAR_TONE_BG[tone])}
+                style={{ width: `${pct}%`, animationDelay: `${i * 60}ms` }}
                 role="img"
                 aria-label={`${d.label}: ${d.display ?? d.value}`}
               >
@@ -280,10 +283,17 @@ export function LineChart({
     ` L${pts[pts.length - 1]!.x.toFixed(2)},${paddingTop + innerH} Z`;
 
   const yTicks = yAxis ? [min, (min + max) / 2, max] : [];
+  // First / mid / last points, deduped — with only one or two buckets
+  // the three ticks would otherwise render identical labels.
+  const xTickLabels = new Set<string>();
   const xTicks = xAxis
-    ? pts.length > 0
-      ? [pts[0]!, pts[Math.floor(pts.length / 2)]!, pts[pts.length - 1]!]
-      : []
+    ? pts.filter((p, i) => {
+        if (i !== 0 && i !== Math.floor(pts.length / 2) && i !== pts.length - 1) return false;
+        const key = p.d.label ?? `#${i + 1}`;
+        if (xTickLabels.has(key)) return false;
+        xTickLabels.add(key);
+        return true;
+      })
     : [];
 
   return (
@@ -327,8 +337,9 @@ export function LineChart({
           })}
         </g>
       )}
-      {/* Area + line */}
-      <path d={areaPath} fill={LINE_TONE[tone]} fillOpacity={0.12} stroke="none" />
+      {/* Area + line — line draws on once per mount (normalised
+          pathLength keeps dash math independent of true path length). */}
+      <path d={areaPath} fill={LINE_TONE[tone]} fillOpacity={0.12} stroke="none" className="chart-area-in" />
       <path
         d={linePath}
         fill="none"
@@ -336,6 +347,8 @@ export function LineChart({
         strokeWidth={1.5}
         strokeLinecap="round"
         strokeLinejoin="round"
+        pathLength={1}
+        className="chart-line-draw"
       />
       {/* X-axis tick labels */}
       {xAxis && (
@@ -373,7 +386,13 @@ export function LineChart({
 
 interface StatTileProps {
   label: string;
-  value: ReactNode;
+  /** Static value. Required unless `countUp` is provided. */
+  value?: ReactNode;
+  /** Numeric value to count up from 0 (or from the previous poll value).
+   *  When set, `value` should be the formatted fallback/shell. */
+  countUp?: number;
+  /** Formatter applied to the live count-up number. */
+  format?: (n: number) => ReactNode;
   /** Pre-formatted value for the sparkline tooltip. */
   formatted?: string;
   delta?: { value: number; suffix?: string };
@@ -392,6 +411,8 @@ const DELTA_NEGATIVE = "text-rust";
 export function StatTile({
   label,
   value,
+  countUp,
+  format,
   formatted,
   delta,
   spark,
@@ -416,7 +437,7 @@ export function StatTile({
       </div>
       <div className="flex items-baseline gap-2">
         <span className="font-display text-[22px] leading-none text-text tabular-nums">
-          {value}
+          {countUp !== undefined ? <CountUp value={countUp} format={format} /> : value}
         </span>
         {delta && (
           <span

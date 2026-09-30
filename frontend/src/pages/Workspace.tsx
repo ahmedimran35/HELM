@@ -68,9 +68,9 @@ export function WorkspacePage() {
   const tabs: Tab[] = ["memory", "files", "keychain", "crons", "posture"];
 
   return (
-    <div className="p-6 max-w-[920px]">
+    <div className="content-page-sm">
       <div className="flex items-baseline gap-3 mb-1">
-        <h2 className="font-display text-[20px] font-semibold text-text tracking-wide">
+        <h2 className="page-title">
           Workspace
         </h2>
       </div>

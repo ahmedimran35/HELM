@@ -3,6 +3,7 @@
 // recognisable at a glance.
 
 import { type CSSProperties } from "react";
+import { useTheme } from "../../theme/ThemeProvider";
 
 interface Props {
   name: string;
@@ -29,6 +30,21 @@ const PALETTE = [
   { bg: "#1d2920", fg: "#86C292" }, // mint
 ];
 
+// Light-mode palette. Backgrounds are deliberately DARKER than the light
+// `--bg` (#eeedea) so monograms stay visible against the page instead of
+// dissolving into it. Foregrounds are the dark accent tones, so the text
+// holds contrast against its own tinted disc.
+const PALETTE_LIGHT = [
+  { bg: "#dcd7cc", fg: "#7d5a12" }, // brass on sand
+  { bg: "#cfe0dc", fg: "#225e52" }, // teal on pale teal
+  { bg: "#ddd6e6", fg: "#6b52a0" }, // violet on lilac
+  { bg: "#d8e2d0", fg: "#41682f" }, // sage on pale green
+  { bg: "#e3dad0", fg: "#8a5f18" }, // amber on warm tan
+  { bg: "#d3dde6", fg: "#3f647f" }, // sky on pale blue
+  { bg: "#e6d5d5", fg: "#95412f" }, // rust on rose
+  { bg: "#d2e2da", fg: "#2f6b50" }, // mint on pale green
+];
+
 function initials(name: string): string {
   const parts = name.trim().split(/[\s@.]+/).filter(Boolean);
   if (parts.length === 0) return "?";
@@ -37,7 +53,9 @@ function initials(name: string): string {
 }
 
 export function Avatar({ name, size = 32, role }: Props) {
-  const palette = PALETTE[hashStr(name) % PALETTE.length]!;
+  const { theme } = useTheme();
+  const activePalette = theme === "dark" ? PALETTE : PALETTE_LIGHT;
+  const palette = activePalette[hashStr(name) % activePalette.length]!;
   const isAdmin = role === "admin";
   const style: CSSProperties = {
     width: size,

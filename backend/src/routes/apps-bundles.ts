@@ -64,6 +64,27 @@ const MIME: Record<string, string> = {
 const SDK_VERSION = "7";
 const SDK_SCRIPT_TAG = `<script src="/apps/_sdk.js?v=${SDK_VERSION}"></script>`;
 
+// Defense-in-depth CSP for app-bundle HTML. Bundles run their own JS by
+// design (that is the app model), so script-src stays permissive — but we
+// still lock down the vectors that let a compromised bundle escape its
+// own page: no framing by third parties (clickjacking), no <base> hijack
+// of relative URLs, forms can only post back to the same origin, and no
+// plugin/object embedding. External script hosts are NOT allowed — a
+// bundle must ship its own code, not pull from a CDN the operator hasn't
+// vetted.
+const APP_CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https:",
+  "connect-src 'self' https:",
+  "font-src 'self' data:",
+  "frame-ancestors 'none'",
+  "base-uri 'none'",
+  "form-action 'self'",
+  "object-src 'none'",
+].join("; ");
+
 // Inject the SDK <script> tag just before </head>. If the document
 // doesn't have a <head> (rare, but seen in some hand-rolled bundles),
 // inject it before <body> so the SDK is still available before the
@@ -156,6 +177,7 @@ router.get("/:slug/*", async (c) => {
         return new Response(transformed, {
           headers: {
             "content-type": type,
+            "content-security-policy": APP_CSP,
             // Short cache — bundles can change with each deploy. Apps can
             // add their own versioned URLs in their JS to bust further.
             "cache-control": "public, max-age=60",
@@ -180,6 +202,7 @@ router.get("/:slug/*", async (c) => {
     return new Response(transformed, {
       headers: {
         "content-type": "text/html; charset=utf-8",
+        "content-security-policy": APP_CSP,
         "cache-control": "public, max-age=60",
       },
     });

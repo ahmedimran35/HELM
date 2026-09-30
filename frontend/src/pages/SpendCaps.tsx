@@ -106,10 +106,10 @@ export function SpendCapsPage() {
   const overWarn = rows?.filter((r) => r.over_warn).length ?? 0;
 
   return (
-    <div className="p-6 max-w-[1100px] space-y-6">
+    <div className="content-page space-y-6">
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
-          <h2 className="font-display text-[24px] font-semibold text-text tracking-wide leading-tight">
+          <h2 className="page-title">
             Spend caps
           </h2>
           <p className="text-textMuted text-[13px] mt-1">

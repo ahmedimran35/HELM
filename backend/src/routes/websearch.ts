@@ -45,6 +45,8 @@ interface WebSearchResponse {
   query: string;
   results: WebSearchResult[];
   answer: string | null;
+  /** Fuller content behind the expandable "details" section. */
+  details: string | null;
   service: string | null;
   remaining_today: number;
   limit: number;
@@ -204,6 +206,7 @@ async function storeCache(service: string, query: string, response: WebSearchRes
     query: response.query,
     results: response.results,
     answer: response.answer,
+    details: response.details,
     service: response.service,
     remaining_today: 0,
     limit: 0,
@@ -283,6 +286,56 @@ async function listProviders(): Promise<ProviderConfig[]> {
   `;
 }
 
+/** Turn a raw page markdown dump into a concise answer + fuller details.
+ *  The full page (nav, images, social-share links, footer) is not a "direct
+ *  answer" — keep a 2-4 line summary plus a longer excerpt for the
+ *  expandable details section. Lightpanda error output (DNS failures,
+ *  timeouts) and Cloudflare challenge pages are not content and yield null. */
+const LIGHTPANDA_ERROR_RE =
+  /Navigation failed|Couldn'?tResolveHost|Could not resolve host|Connection refused|ConnectionRefused|ERR_NAME_NOT_RESOLVED|timed out|Timeout|Just a moment|Verification successful|Ray ID|Checking your browser|Enable JavaScript/i;
+
+/** Wikipedia (and similar) page chrome: the nav block that lightpanda
+ *  renders after the H1. Without this, "Jump to content / Main menu /
+ *  move to sidebar hide / Navigation / Contribute …" shows up as the
+ *  opening of the "Direct answer". */
+const NAV_CHROME_RE =
+  /^(Jump to content|Main menu|move to sidebar hide|Navigation|Contribute|Main page|Contents|Current events|Random article|About Wikipedia|Contact us|Help Learn to edit|Community portal|Recent changes|Upload file|Special pages|Appearance|Donate|Create account|Log in|Not logged in|Talk|Contributions|Learn to edit|View history|More|Tools|Wiki tools|Page tools|From Wikipedia|Print\/export|In other projects|Languages|Search|Menu|Toggle the table of contents|Add interlanguage links|Edit links|short description|Coordinates|toggle|Sidebar|hide|Contents \(Top\)|Top|Talk|Read|Edit|View history|Watchlist|Main page|Simple English|Change your own|Pages for deleted|related changes|Cite this page|Wikidata item|Printable version|Download as PDF|Wikimedia Commons)\b.*$/gim;
+
+function stripNavChrome(md: string): string {
+  return md.replace(NAV_CHROME_RE, "").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/** Truncate at a sentence boundary (., !, ?) so the answer never cuts
+ *  mid-word. If no boundary exists before the limit, hard-truncate. */
+function sentenceEnd(s: string, limit: number): string {
+  const chunk = s.slice(0, limit);
+  const lastStop = Math.max(
+    chunk.lastIndexOf(". "),
+    chunk.lastIndexOf("! "),
+    chunk.lastIndexOf("? "),
+    chunk.lastIndexOf(".\n"),
+    chunk.lastIndexOf("!\n"),
+    chunk.lastIndexOf("?\n"),
+  );
+  return lastStop > limit * 0.5 ? chunk.slice(0, lastStop + 1) : chunk;
+}
+
+function sanitizeAnswer(raw: string | null): { answer: string | null; details: string | null } {
+  if (!raw || LIGHTPANDA_ERROR_RE.test(raw)) {
+    return { answer: null, details: null };
+  }
+  const stripped = stripNavChrome(raw)
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "") // images
+    .replace(/\[(?:More News|Photo Gallery|Scroll to top|previous|next|slideshow)\]\([^)]*\)/gi, "")
+    .replace(/https?:\/\/[^\s)]+/g, "") // bare URLs (share links etc.)
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return {
+    answer: sentenceEnd(stripped, 250) || null,
+    details: stripped.slice(0, 2000) || null,
+  };
+}
+
 async function callLightpandaSearch(
   query: string,
   maxResults: number,
@@ -305,6 +358,7 @@ async function callLightpandaSearch(
           service: "safe_blocked",
           results: [],
           answer: "URL blocked for safety",
+          details: null,
           remaining_today: 0,
           limit: 0,
         };
@@ -312,10 +366,12 @@ async function callLightpandaSearch(
       throw err;
     }
     const r = await lightpandaFetch(url);
+    const { answer, details } = sanitizeAnswer(r.markdown);
     return {
       query,
       service: "lightpanda",
-      answer: r.markdown.slice(0, 4000),
+      answer,
+      details,
       results: [
         {
           title: r.title || url,
@@ -332,18 +388,29 @@ async function callLightpandaSearch(
   // Wikipedia, with a Wikipedia REST fast-path for "who is X" queries.
   const { results, topMarkdown, answerBox } = await lightpandaSearchWithTopPage(query, maxResults);
   if (results.length === 0) {
-    return { query, service: "lightpanda", results: [], answer: null, remaining_today: 0, limit: 0 };
+    return { query, service: "lightpanda", results: [], answer: null, details: null, remaining_today: 0, limit: 0 };
   }
+  const { answer, details } = sanitizeAnswer(answerBox || topMarkdown);
+  const cleanResults = results.map((r) => ({
+    title: r.title,
+    url: r.url,
+    // Wikipedia results use the clean extract; search-engine results use
+    // the engine's own snippet (extracted from the result page HTML).
+    snippet: r.source === "wikipedia" ? (answer ?? "").slice(0, 300) : r.snippet ?? "",
+    source: "lightpanda",
+  }));
+  // Fallback: when there's no answer box and the top page fetch failed
+  // (Cloudflare challenge, DNS error), use the first result's snippet as
+  // the direct answer so the user gets SOMETHING useful.
+  const fallbackAnswer = cleanResults.find((r) => r.snippet)?.snippet ?? null;
+  const finalAnswer = answer ?? fallbackAnswer;
+  const finalDetails = details ?? (fallbackAnswer && !answer ? fallbackAnswer : null);
   return {
     query,
     service: "lightpanda",
-    answer: answerBox || topMarkdown || null,
-    results: results.map((r) => ({
-      title: r.title,
-      url: r.url,
-      snippet: r.source === "wikipedia" ? topMarkdown.slice(0, 800) : "",
-      source: "lightpanda",
-    })),
+    answer: finalAnswer,
+    details: finalDetails,
+    results: cleanResults,
     remaining_today: 0,
     limit: 0,
   };
@@ -440,6 +507,7 @@ router.post("/", async (c) => {
           query: body.query ?? body.url!,
           service: "tavily",
           answer: b.answer ?? null,
+          details: null,
           results: (b.results ?? []).map((r) => ({
             title: r.title,
             url: r.url,
@@ -468,6 +536,7 @@ router.post("/", async (c) => {
           query: body.query ?? body.url!,
           service: "brave",
           answer: null,
+          details: null,
           results: (b.web?.results ?? []).map((r) => ({
             title: r.title,
             url: r.url,
@@ -495,6 +564,7 @@ router.post("/", async (c) => {
           query: body.query ?? body.url!,
           service: "serpapi",
           answer: b.answer_box?.answer ?? null,
+          details: null,
           results: (b.organic_results ?? []).map((r) => ({
             title: r.title,
             url: r.link,

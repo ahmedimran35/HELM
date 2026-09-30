@@ -30,12 +30,22 @@ const config: Config = {
         rust: "rgb(var(--rust-rgb) / <alpha-value>)",
       },
       fontFamily: {
-        display: ['"Space Grotesk"', "system-ui", "sans-serif"],
+        // Display was "Space Grotesk". Dropping it removes an entire font
+        // payload from the critical path for a heading face that was barely
+        // distinguishable from Inter at the sizes used here. Inter at
+        // weight 600 reads just as deliberate at 18–20px.
+        display: ["Inter", "system-ui", "sans-serif"],
         body: ["Inter", "system-ui", "sans-serif"],
         mono: ['"IBM Plex Mono"', "ui-monospace", "monospace"],
       },
       fontSize: {
         base: ["14px", { lineHeight: "20px" }],
+      },
+      // Card elevation layers (defined per-theme in styles/index.css so dark
+      // mode can carry heavier shadows).
+      boxShadow: {
+        card: "var(--shadowCard)",
+        "card-hover": "var(--shadowCardHover)",
       },
       borderColor: {
         DEFAULT: "var(--border)",

@@ -224,6 +224,7 @@ export class OpenApiClient {
     models_seen?: number;
     sample?: string[];
     error?: string;
+    generation?: { ok: boolean; model?: string; error?: string };
   }> {
     const q = opts.allowLocal ? "?allow_local=1" : "";
     return apiPost(`/providers/${id}/test${q}`);

@@ -30,8 +30,9 @@ import {
 export function lookupCached(
   query: string,
   userId: string,
+  variant = "default",
 ): Promise<CachedResponse | null> {
-  return genericLookupCached(query, null, { userId });
+  return genericLookupCached(query, null, { userId, variant });
 }
 
 /** Store a chat (query → response) pair for future exact-match hits.
@@ -42,6 +43,7 @@ export function storeCached(
   response: string,
   model: string,
   userId: string,
+  variant = "default",
 ): Promise<void> {
-  return genericStoreCached(query, response, model, null, { userId });
+  return genericStoreCached(query, response, model, null, { userId, variant });
 }

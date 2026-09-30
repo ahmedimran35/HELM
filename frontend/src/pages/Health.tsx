@@ -101,10 +101,10 @@ export function HealthPage() {
   const summary = data?.summary;
 
   return (
-    <div className="p-6 max-w-[960px] space-y-6">
+    <div className="content-page-sm space-y-6">
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
-          <h2 className="font-display text-[24px] font-semibold text-text tracking-wide leading-tight">
+          <h2 className="page-title">
             Provider health
           </h2>
           <p className="text-textMuted text-[13px] mt-1">

@@ -150,10 +150,10 @@ export function AppsPage() {
   }, [apps, query]);
 
   return (
-    <div className="p-6 max-w-[1180px] space-y-5">
+    <div className="content-page space-y-5">
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
-          <h2 className="font-display text-[20px] font-semibold text-text tracking-wide">
+          <h2 className="page-title">
             Apps
           </h2>
           <div className="text-textMuted text-[13px] max-w-[60ch]">

@@ -26,6 +26,7 @@ import { runSkillsSeed } from "../db/seed/skills-seed.ts";
 import { seedAppsIfEmpty } from "../db/seed/apps-seed.ts";
 import { logAudit } from "../lib/audit.ts";
 import { safeError } from "../lib/safe-error.ts";
+import { rateLimit } from "../middleware/ratelimit.ts";
 
 const router = new Hono();
 
@@ -91,7 +92,13 @@ const ALLOWED_PROVIDER_TYPES = new Set([
   "openai-compatible",
 ]);
 
-router.post("/complete", async (c) => {
+router.post(
+  "/complete",
+  // Unauthenticated bcrypt-hash sink (invites hash a 14-char password
+  // each). Rate-limit per-IP so a pre-boot attacker can't burn CPU
+  // hammering the wizard before the admin completes setup.
+  rateLimit({ limit: 10, windowMs: 60_000, scope: "ip" }),
+  async (c) => {
   const body = ((await c.req.json().catch(() => ({}))) ?? {}) as CompleteBody;
 
   // The entire setup wizard is a one-time, unauthenticated bootstrap. Once
@@ -152,7 +159,13 @@ router.post("/complete", async (c) => {
       return c.json({ error: "provider.api_key required", field: "provider.api_key" }, 400);
     }
     try {
-      await assertSafeBaseUrl(providerBaseUrl, { allowLocal: true, allowAnyPort: true });
+      // allowLocal:false — this is an UNAUTHENTICATED first-boot endpoint.
+      // An attacker who reaches the box before the admin does must not be
+      // able to register a provider pointing at loopback / cloud-metadata /
+      // an internal service. Operators who genuinely need a local provider
+      // (e.g. Ollama on localhost) opt in explicitly via
+      // HELM_ALLOW_LOCAL_PROVIDERS=1, which assertSafeBaseUrl honours.
+      await assertSafeBaseUrl(providerBaseUrl, { allowLocal: false, allowAnyPort: true });
     } catch (err) {
       return safeError(c, err, { status: 400, code: "setup_provider_url_invalid", publicMessage: "provider.base_url is not a safe URL" });
     }
@@ -247,7 +260,8 @@ router.post("/complete", async (c) => {
   await runBootstrap();
 
   return c.json({ ok: true });
-});
+  },
+);
 
 // local helper — mirror of generateOneTimePassword but without the
 // shared prefix constant import; kept self-contained so a future

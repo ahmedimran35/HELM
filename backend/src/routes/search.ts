@@ -53,14 +53,28 @@ interface Result {
  * with frontend/src/nav/items.ts.
  */
 const STATIC_PAGES: Array<Result & { adminOnly: boolean }> = [
-  { id: "page:/chat",          kind: "page", title: "Chat",          subtitle: "1:1 with any assigned model",                                path: "/chat",       adminOnly: false, badge: "�⌘C" },
+  // Cover the full sidebar (frontend/src/nav/items.ts). Since the sidebar no
+  // longer has its own inline filter, this catalogue is the only way to reach
+  // a page by typing — keep it in sync when nav items change.
+  { id: "page:/",                   kind: "page", title: "Home",               subtitle: "Dashboard + recent activity",                        path: "/",                   adminOnly: false },
+  { id: "page:/approvals",          kind: "page", title: "Approvals",          subtitle: "Pending agent requests waiting for your OK",         path: "/approvals",          adminOnly: false },
+  { id: "page:/search",             kind: "page", title: "Search",             subtitle: "Universal search across everything",                 path: "/search",             adminOnly: false },
+  { id: "page:/workflows",          kind: "page", title: "Workflows",          subtitle: "Visual workflow canvas",                             path: "/workflows",          adminOnly: false },
+  { id: "page:/apps",               kind: "page", title: "Apps",               subtitle: "Your installed apps + catalog",                      path: "/apps",               adminOnly: false },
+  { id: "page:/marketplace",        kind: "page", title: "Marketplace",        subtitle: "Discover + install apps / templates / personas",     path: "/marketplace",        adminOnly: false },
+  { id: "page:/sandbox",            kind: "page", title: "Sandbox",            subtitle: "Code execution environment",                         path: "/sandbox",            adminOnly: false },
+  { id: "page:/watches",            kind: "page", title: "Watches",            subtitle: "Scheduled + webhook triggers",                       path: "/watches",            adminOnly: false },
+  { id: "page:/health",             kind: "page", title: "Health",             subtitle: "Harness status + latency",                           path: "/health",             adminOnly: false },
+  { id: "page:/analytics",          kind: "page", title: "Analytics",          subtitle: "Latency · usage · cost · top models",                path: "/analytics",          adminOnly: false },
+  { id: "page:/spend-caps",         kind: "page", title: "Spend Caps",         subtitle: "Per-panel budget limits",                            path: "/spend-caps",         adminOnly: false },
+  { id: "page:/connected-accounts", kind: "page", title: "Connected Accounts", subtitle: "OAuth providers (Google · GitHub · Microsoft)",         path: "/connected-accounts", adminOnly: false },
+  { id: "page:/skills",             kind: "page", title: "Skills",             subtitle: "Reusable agent behaviors (admin)",                    path: "/skills",             adminOnly: true },
+  { id: "page:/chat",          kind: "page", title: "Chat",          subtitle: "1:1 with any assigned model",                                path: "/chat",       adminOnly: false, badge: "⌘C" },
   { id: "page:/panels",        kind: "page", title: "Panels",        subtitle: "Multiplayer rooms",                                          path: "/panels",     adminOnly: false, badge: "⇧⌘P" },
   { id: "page:/workspace",     kind: "page", title: "Workspace",     subtitle: "Memory · files · sandbox · keychain · crons · posture",      path: "/workspace",  adminOnly: false },
   { id: "page:/web-search",    kind: "page", title: "Web Search",    subtitle: "Real-time search via the configured provider",               path: "/web-search", adminOnly: false },
-  { id: "page:/analytics",     kind: "page", title: "Analytics",     subtitle: "Spend · volume · top users (admin)",                         path: "/analytics",  adminOnly: true,  badge: "⇧⌘A" },
   { id: "page:/requests",      kind: "page", title: "Requests",      subtitle: "Pending access decisions (admin)",                          path: "/requests",   adminOnly: true },
   { id: "page:/providers",     kind: "page", title: "Providers",     subtitle: "Manage AI providers and model registry (admin)",             path: "/providers",  adminOnly: true },
-  { id: "page:/integrations",  kind: "page", title: "Integrations",  subtitle: "Discord · Telegram · Slack webhooks (admin)",                path: "/integrations", adminOnly: true },
   { id: "page:/settings",      kind: "page", title: "Settings",      subtitle: "Account · users · websearch · logs",                         path: "/settings",   adminOnly: false, badge: "⇧⌘S" },
 ];
 

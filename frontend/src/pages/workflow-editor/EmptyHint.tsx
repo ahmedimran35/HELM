@@ -3,6 +3,7 @@
 // existing AddNodePopup pattern.
 
 import { LightningIcon, ZapIcon, SendIcon } from "../../components/ui/Icon";
+import { useSvgTheme } from "./svg-theme";
 import { NODE_KIND_META } from "./constants";
 import type { NodeKind } from "./types";
 
@@ -17,6 +18,7 @@ const QUICK_KINDS: { kind: NodeKind; label: string; Icon: typeof LightningIcon }
 ];
 
 export function EmptyHint({ onPick }: Props) {
+  const t = useSvgTheme();
   return (
     <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
       <div className="pointer-events-auto bg-panel border border-brass/40 shadow-2xl px-6 py-5 max-w-[420px]">
@@ -26,7 +28,7 @@ export function EmptyHint({ onPick }: Props) {
             <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
               <path
                 d="M30 20 L12 20 M12 20 L18 14 M12 20 L18 26"
-                stroke="#C9A227"
+                stroke={t.brass}
                 strokeWidth="2"
                 strokeLinecap="round"
                 strokeLinejoin="round"

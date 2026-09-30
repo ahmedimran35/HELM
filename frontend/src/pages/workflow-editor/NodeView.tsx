@@ -16,6 +16,7 @@ import { MAX_LABEL, MAX_PREVIEW } from "./constants";
 import { NODE_KIND_META, PORT_R } from "./constants";
 import { nodeBodyPreview, nodeBounds } from "./helpers";
 import type { NodeLogEntry, RunIndicatorStatus, WorkflowNode } from "./types";
+import { useSvgTheme, type ThemeColors } from "./svg-theme";
 
 interface Props {
   node: WorkflowNode;
@@ -41,13 +42,17 @@ function runStatusFor(entry: NodeLogEntry | undefined, isRunning: boolean): RunI
   return "skipped";
 }
 
-const RUN_COLOR: Record<RunIndicatorStatus, string> = {
-  idle: "#4E5560",     // textFaint
-  running: "#4c9c90",  // teal — animated
-  ok: "#4c9c90",       // teal
-  error: "#B5533C",    // rust
-  skipped: "#4E5560",
-};
+function runColor(status: RunIndicatorStatus, t: ThemeColors): string {
+  switch (status) {
+    case "idle":      return t.textFaint;
+    case "running":   return t.teal;
+    case "ok":        return t.teal;
+    case "error":     return t.rust;
+    case "skipped":   return t.textFaint;
+  }
+}
+
+const SEL_STROKE_LIGHT = "#a47820";
 
 function NodeTooltipBody({ node, logEntry }: { node: WorkflowNode; logEntry: NodeLogEntry | undefined }) {
   const meta = NODE_KIND_META[node.kind];
@@ -89,15 +94,15 @@ export function NodeView({
   const meta = NODE_KIND_META[node.kind];
   const b = nodeBounds(node);
   const label = (node.label?.trim() || meta.label).slice(0, MAX_LABEL);
-  // Body text — prefer the model name on agent_run (it tells the user
-  // which AI answered last), then the body preview, then the description.
   const configuredModel = modelDisplayName?.trim();
   const baseBody = nodeBodyPreview(node) || meta.description;
   const bodyText = (configuredModel || baseBody).slice(0, MAX_PREVIEW);
   const runStatus = runStatusFor(logEntry, isRunning);
-  const runColor = RUN_COLOR[runStatus];
+  const t = useSvgTheme();
+  const rc = runColor(runStatus, t);
   const bodyIsModel =
     node.kind === "agent_run" && Boolean(configuredModel) && !nodeBodyPreview(node);
+  const selStroke = selected ? (t.brass === "#dcbb40" ? "#C9A227" : SEL_STROKE_LIGHT) : null;
 
   return (
     <g
@@ -109,14 +114,13 @@ export function NodeView({
       <NodeTooltipBody node={node} logEntry={logEntry} />
 
       {meta.shape === "circle" ? (
-        // Trigger node — circle with icon and label inside.
         <g>
           <circle
             cx={b.w / 2}
             cy={b.h / 2}
             r={Math.min(b.w, b.h) / 2 - 2}
-            fill="#14171d"
-            stroke={selected ? "#C9A227" : meta.color}
+            fill={t.border}
+            stroke={selStroke ?? meta.color}
             strokeWidth={selected ? 2.5 : 1.5}
           />
           <circle
@@ -140,7 +144,7 @@ export function NodeView({
             y={b.h / 2 + 18}
             textAnchor="middle"
             fontSize={10}
-            fill="#e6e6e6"
+            fill={t.text}
             fontWeight={500}
             style={{ pointerEvents: "none" }}
           >
@@ -148,12 +152,11 @@ export function NodeView({
           </text>
         </g>
       ) : meta.shape === "diamond" ? (
-        // Condition node — diamond with icon and label inside.
         <g>
           <polygon
             points={`${b.w / 2},0 ${b.w},${b.h / 2} ${b.w / 2},${b.h} 0,${b.h / 2}`}
-            fill="#14171d"
-            stroke={selected ? "#C9A227" : meta.color}
+            fill={t.border}
+            stroke={selStroke ?? meta.color}
             strokeWidth={selected ? 2.5 : 1.5}
           />
           <polygon
@@ -172,25 +175,21 @@ export function NodeView({
           </text>
         </g>
       ) : (
-        // Action card — header stripe + body.
         <g>
-          {/* Drop shadow */}
           <rect
             x={3}
             y={5}
             width={b.w}
             height={b.h}
             rx={8}
-            fill="#000"
-            opacity={0.6}
+            fill="rgba(0,0,0,0.08)"
           />
-          {/* Card body */}
           <rect
             width={b.w}
             height={b.h}
             rx={8}
-            fill="#1a1e25"
-            stroke={selected ? "#C9A227" : meta.color}
+            fill={t.panel}
+            stroke={selStroke ?? meta.color}
             strokeWidth={selected ? 2.5 : 2}
             strokeOpacity={selected ? 1 : 0.8}
           />
@@ -234,7 +233,7 @@ export function NodeView({
             cx={b.w - 12}
             cy={16}
             r={4}
-            fill={runColor}
+            fill={rc}
             opacity={runStatus === "running" ? 0.7 : 1}
           >
             {runStatus === "running" && (
@@ -259,7 +258,7 @@ export function NodeView({
             x={12}
             y={46}
             fontSize={12}
-            fill="#e6e6e6"
+            fill={t.text}
             fontWeight={500}
             style={{ pointerEvents: "none" }}
           >
@@ -270,7 +269,7 @@ export function NodeView({
             x={12}
             y={62}
             fontSize={10}
-            fill={bodyIsModel ? "#8A7220" : "#6a707a"}
+            fill={bodyIsModel ? t.brassDark : t.textMuted}
             style={{ pointerEvents: "none" }}
           >
             {bodyText.length > MAX_PREVIEW ? bodyText.slice(0, MAX_PREVIEW - 1) + "…" : bodyText}
@@ -299,7 +298,7 @@ export function NodeView({
         cy={b.h}
         r={PORT_R}
         fill={meta.color}
-        stroke="#0B0E12"
+        stroke={t.border}
         strokeWidth={2}
         style={{ pointerEvents: "none" }}
         data-port="out-visual"
@@ -326,7 +325,7 @@ export function NodeView({
             cx={b.w / 2}
             cy={0}
             r={PORT_R}
-            fill="#1a1e25"
+            fill={t.panel}
             stroke={meta.color}
             strokeWidth={1.5}
             style={{ pointerEvents: "none" }}

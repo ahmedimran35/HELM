@@ -65,6 +65,14 @@ describe("hashQuery", () => {
     const userHash = hashQuery("hi", null, USER_A);
     expect(panelHash).not.toBe(userHash);
   });
+
+  test("differs across response variants", () => {
+    const noSearch = hashQuery("hi", null, USER_A, "model-a\u0000openai\u0000web:off");
+    const liveSearch = hashQuery("hi", null, USER_A, "model-a\u0000openai\u0000web:on");
+    const otherModel = hashQuery("hi", null, USER_A, "model-b\u0000openai\u0000web:off");
+    expect(noSearch).not.toBe(liveSearch);
+    expect(noSearch).not.toBe(otherModel);
+  });
 });
 
 describe("lookupCached", () => {
@@ -87,6 +95,26 @@ describe("lookupCached", () => {
     expect(r?.query_text).toBe(q);
     expect(r?.response_text).toBe("the-response");
     expect(r?.model).toBe("test-model");
+  });
+
+  test("does not replay a search-enabled variant for a no-search request", async () => {
+    const q = "variant-scope-" + Date.now();
+    const withSearch = "model-a\u0000openai\u0000web:on\u0000";
+    const withoutSearch = "model-a\u0000openai\u0000web:off\u0000";
+    await storeCached(q, "search response", "test-model", null, {
+      userId: USER_A,
+      variant: withSearch,
+    });
+    const wrongVariant = await lookupCached(q, null, {
+      userId: USER_A,
+      variant: withoutSearch,
+    });
+    const matchingVariant = await lookupCached(q, null, {
+      userId: USER_A,
+      variant: withSearch,
+    });
+    expect(wrongVariant).toBeNull();
+    expect(matchingVariant?.response_text).toBe("search response");
   });
 
   test("returns null on an expired row (expires_at < now())", async () => {

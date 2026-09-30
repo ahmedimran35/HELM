@@ -33,6 +33,7 @@ import {
   SearchIcon,
 } from "../components/ui/Icon";
 import { cn } from "../lib/cn";
+import { useTheme } from "../theme/ThemeProvider";
 
 // Re-export the editor page so the existing router import
 // (`./pages/Workflows` → `WorkflowEditorPage`) keeps working after the
@@ -298,7 +299,7 @@ export function WorkflowsPage() {
   return (
     <div className="flex h-full">
       {/* Main column */}
-      <div className="flex-1 overflow-y-auto p-6 max-w-[1280px]">
+      <div className="flex-1 overflow-y-auto content-page">
         {/* Hero header */}
         <div className="flex items-start justify-between gap-4 mb-6">
           <div>
@@ -415,7 +416,7 @@ export function WorkflowsPage() {
               <button
                 key={t.slug}
                 onClick={() => setShowTemplates(true)}
-                className="w-full text-left bg-panel border border-border hover:border-brass/40 p-3 transition-colors"
+                className="w-full text-left card-interactive bg-panel border border-border hover:border-brass/40 p-3"
               >
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-[12px] font-medium truncate">
@@ -655,7 +656,7 @@ function WorkflowCard({
   return (
     <div
       onClick={onOpen}
-      className="bg-panel border border-border hover:border-brass/40 transition-colors cursor-pointer group"
+      className="card-interactive bg-panel border border-border hover:border-brass/40 cursor-pointer group"
     >
       {/* Mini canvas preview */}
       <div className="h-28 bg-bg/60 border-b border-borderSoft relative overflow-hidden">
@@ -727,6 +728,10 @@ function WorkflowCard({
 }
 
 function MiniCanvasPreview({ graph }: { graph: WorkflowGraph }) {
+  const { theme } = useTheme();
+  const lightOverrides: Record<string, string> = theme === "light"
+    ? { trigger: "#a47820", agent_run: "#2d6a5c", panel_message: "#5a82a8", http_post: "#b4913c", condition: "#7a5fb0", delay: "#8a8a8a" }
+    : {};
   const nodes = graph?.nodes ?? [];
   const edges = graph?.edges ?? [];
   if (nodes.length === 0) {
@@ -773,7 +778,7 @@ function MiniCanvasPreview({ graph }: { graph: WorkflowGraph }) {
             <path
               key={e.id}
               d={d}
-              stroke="#4c9c90"
+              stroke={theme === "light" ? "#2d6a5c" : "#4c9c90"}
               strokeWidth={2}
               fill="none"
               opacity={0.7}
@@ -791,20 +796,20 @@ function MiniCanvasPreview({ graph }: { graph: WorkflowGraph }) {
                   cx={b.w / 2}
                   cy={b.h / 2}
                   r={Math.min(b.w, b.h) / 2 - 2}
-                  fill={meta.color}
+                  fill={lightOverrides[n.kind] || meta.color}
                   opacity={0.85}
                 />
               ) : meta.shape === "diamond" ? (
                 <polygon
                   points={`${b.w / 2},0 ${b.w},${b.h / 2} ${b.w / 2},${b.h} 0,${b.h / 2}`}
-                  fill={meta.color}
+                  fill={lightOverrides[n.kind] || meta.color}
                   opacity={0.85}
                 />
               ) : (
                 <rect
                   width={b.w}
                   height={b.h}
-                  fill={meta.color}
+                  fill={lightOverrides[n.kind] || meta.color}
                   opacity={0.85}
                 />
               )}
@@ -843,7 +848,7 @@ function TemplatesSheet({
             <button
               key={t.slug}
               onClick={() => onPick(t)}
-              className="w-full text-left bg-panel border border-border hover:border-brass/40 p-3 transition-colors"
+              className="w-full text-left card-interactive bg-panel border border-border hover:border-brass/40 p-3"
             >
               <div className="flex items-center justify-between mb-1">
                 <span className="text-[13px] font-medium">{t.name}</span>

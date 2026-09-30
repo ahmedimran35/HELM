@@ -47,6 +47,7 @@ import { createSession } from "../auth/session.ts";
 import { serializeSessionCookie, isSecureRequest } from "../middleware/auth.ts";
 import { logAudit } from "../lib/audit.ts";
 import { log, rawConsole } from "../lib/log.ts";
+import { rateLimit } from "../middleware/ratelimit.ts";
 
 const router = new Hono();
 
@@ -274,14 +275,18 @@ function readStateCookie(req: Request): string | null {
   return null;
 }
 
-function redirectUriFor(req: Request): string {
+function redirectUriFor(): string {
   // The callback URL must exactly match what's registered with the IdP.
-  // Prefer an explicit OAUTH_REDIRECT_BASE if set (so prod can pin it);
-  // otherwise derive from the request URL so dev + containers both work.
+  // Prefer an explicit OAUTH_REDIRECT_BASE if set (so prod can pin it).
+  // Otherwise derive from config.web.origin — NOT from the incoming
+  // request's Host header, which is attacker-controlled when the app
+  // sits behind a misconfigured proxy (or HELM_TRUSTED_PROXY is off).
+  // A spoofed Host would otherwise let an attacker choose the
+  // redirect_uri sent to the IdP.
   const base = envOpt("OAUTH_REDIRECT_BASE");
   if (base) return `${base.replace(/\/$/, "")}/api/oauth/callback`;
-  const u = new URL(req.url);
-  return `${u.protocol}//${u.host}/api/oauth/callback`;
+  const origin = config.web.origin.replace(/\/$/, "");
+  return `${origin}/api/oauth/callback`;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -319,7 +324,7 @@ authedRouter.get("/:provider/start", requireAuth, async (c) => {
   };
   const signed = signState(payload);
 
-  const authorize = provider.authorizeUrl(signed, redirectUriFor(c.req.raw));
+  const authorize = provider.authorizeUrl(signed, redirectUriFor());
   c.header("Set-Cookie", buildStateCookie(signed), { append: true });
   return c.redirect(authorize, 302);
 });
@@ -338,7 +343,13 @@ authedRouter.get("/:provider/start", requireAuth, async (c) => {
 //        - no session, oauth_accounts row exists → log in as that user
 //        - no session, no row → create a new local user + log them in
 //   5) Redirect to /settings?oauth=ok (or oauth=failed/denied on error).
-router.get("/callback", async (c) => {
+router.get(
+  "/callback",
+  // Unauthenticated endpoint that performs an outbound token exchange +
+  // userinfo fetch per call. Rate-limit per-IP so an attacker can't use
+  // it as a free SSRF/CPU amplification relay.
+  rateLimit({ limit: 30, windowMs: 60_000, scope: "ip" }),
+  async (c) => {
   const url = new URL(c.req.url);
   const providerParam = url.searchParams.get("provider") ?? "";
   const code = url.searchParams.get("code") ?? "";
@@ -372,7 +383,7 @@ router.get("/callback", async (c) => {
 
   const clientId = envOpt(`OAUTH_${providerParam.toUpperCase()}_CLIENT_ID`)!;
   const clientSecret = envOpt(`OAUTH_${providerParam.toUpperCase()}_CLIENT_SECRET`)!;
-  const redirectUri = redirectUriFor(c.req.raw);
+  const redirectUri = redirectUriFor();
 
   // 1) Exchange code → token.
   let tokenJson: Record<string, unknown>;
@@ -548,7 +559,27 @@ router.get("/callback", async (c) => {
 
   // 5) Mint a fresh session if the caller didn't already have one.
   if (!sessionUser) {
-    const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
+    // Resolve the client IP the same way requireAuth does — only trust
+    // x-forwarded-for when HELM_TRUSTED_PROXY=1, otherwise fall back to
+    // the single-proxy headers (cf-connecting-ip / x-real-ip) and null.
+    // Reading x-forwarded-for unconditionally would let an attacker spoof
+    // their recorded login IP (and later defeat the IP-bind hijack check).
+    const ip = (() => {
+      const trustProxy = process.env.HELM_TRUSTED_PROXY === "1";
+      if (trustProxy) {
+        const xff = c.req.header("x-forwarded-for");
+        if (xff) {
+          const hops = xff.split(",").map((h) => h.trim()).filter(Boolean);
+          if (hops.length > 0) return hops[hops.length - 1]!;
+        }
+        return null;
+      }
+      const cf = c.req.header("cf-connecting-ip");
+      if (cf && cf.trim()) return cf.trim();
+      const xri = c.req.header("x-real-ip");
+      if (xri && xri.trim()) return xri.trim();
+      return null;
+    })();
     const ua = c.req.header("user-agent") ?? null;
     const session = await createSession({ userId: targetUserId, ip, userAgent: ua });
     const isHttps = isSecureRequest(c.req.url, (k) => c.req.header(k));
@@ -570,7 +601,8 @@ router.get("/callback", async (c) => {
 
   c.header("Set-Cookie", clearStateCookie(), { append: true });
   return c.redirect("/settings?oauth=ok", 302);
-});
+  },
+);
 
 // Create a brand-new user from an OAuth profile. Username defaults to
 // the email local-part (uniquified on collision); name falls back to the

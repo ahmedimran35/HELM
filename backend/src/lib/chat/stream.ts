@@ -111,10 +111,19 @@ export async function writePing(stream: SSEStreamingApi): Promise<void> {
 export function startHeartbeat(
   stream: SSEStreamingApi,
   intervalMs = 15_000,
+  onDead?: () => void,
 ): () => void {
+  let dead = false;
   const timer = setInterval(() => {
     writePing(stream).catch(() => {
-      // Connection dropped — clear will fire next tick.
+      // Connection dropped — surface it once so callers can abort the
+      // work feeding this stream (otherwise a closed tab keeps the
+      // run burning provider calls invisibly).
+      if (!dead) {
+        dead = true;
+        onDead?.();
+      }
+      // Connection dropped — caller decides what to do.
     });
   }, intervalMs);
   return () => clearInterval(timer);
@@ -152,6 +161,13 @@ export async function consumeStreamToSSE(
   let promptTokens: number | undefined;
   let completionTokens: number | undefined;
   for await (const chunk of chunks) {
+    // Harnesses use a terminal chunk with `error` for provider HTTP/fetch
+    // failures. Never treat that as a successful empty assistant reply:
+    // doing so persisted a blank message and sent SSE done, which the UI
+    // rendered as "no response" with no actionable error.
+    if (chunk.error) {
+      throw new Error(chunk.delta || chunk.error);
+    }
     if (chunk.done) {
       promptTokens = chunk.prompt_tokens;
       completionTokens = chunk.completion_tokens;
@@ -161,6 +177,9 @@ export async function consumeStreamToSSE(
       assembled += chunk.delta;
       await writeDelta(stream, chunk.delta);
     }
+  }
+  if (!assembled.trim()) {
+    throw new Error("Harness returned an empty response");
   }
   return { assembled, promptTokens, completionTokens };
 }

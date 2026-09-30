@@ -26,8 +26,8 @@ export function ProvidersPage() {
   const { user } = useAuth();
   if (user?.role !== "admin") return <NoAccess title="Providers" />;
   return (
-    <div className="p-6 max-w-[960px]">
-      <h2 className="font-display text-[20px] font-semibold text-text tracking-wide">
+    <div className="content-page-sm">
+      <h2 className="page-title">
         Providers
       </h2>
       <div className="text-textMuted text-[13px] mb-4">
@@ -124,8 +124,14 @@ function ProvidersTab() {
         const sample = res.sample?.length
           ? ` · sample: ${res.sample.join(", ")}`
           : "";
+        const gen = res.generation;
+        const genNote = gen
+          ? gen.ok
+            ? " · generation OK"
+            : ` · generation FAILED${gen.error ? `: ${gen.error}` : ""}`
+          : "";
         setLastFetched(
-          `Test OK · ${res.latency_ms}ms · ${res.upstream_status} · ${res.models_seen ?? 0} models upstream${sample}`,
+          `Test OK · ${res.latency_ms}ms · ${res.upstream_status} · ${res.models_seen ?? 0} models upstream${sample}${genNote}`,
         );
       } else {
         const msg = `Test failed after ${res.latency_ms}ms: ${res.error ?? res.upstream_status}`;

@@ -132,9 +132,9 @@ export function ApprovalsPage() {
   if (!user) return null;
 
   return (
-    <div className="h-full overflow-y-auto p-6 max-w-[920px] mx-auto">
+    <div className="h-full overflow-y-auto content-page-sm">
       <div className="mb-6">
-        <h1 className="font-display text-[22px] font-semibold text-text">
+        <h1 className="page-title">
           Approvals
         </h1>
         <p className="mt-1 text-[13px] text-textMuted leading-relaxed">

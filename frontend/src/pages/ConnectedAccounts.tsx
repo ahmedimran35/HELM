@@ -2,7 +2,6 @@
 // identities linked to the current user.
 //
 //   - Google / GitHub / Microsoft → OAuth via /api/oauth/<provider>/start
-//   - Slack                       → workspace install via /api/slack/install
 //
 // "Connect" kicks the browser to the provider's authorize URL (so the
 // backend can stash state in a short-lived cookie before the redirect).
@@ -10,15 +9,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { useAuth } from "../auth/AuthContext";
 import { apiGet, apiDelete } from "../api/client";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
-import { CallSign } from "../components/ui/CallSign";
-import { SlackIcon } from "../components/ui/Icon";
 import { useToast } from "../components/ui/feedback/Toast";
-import { cn } from "../lib/cn";
-import { safeHref, safeLocationHref } from "../lib/safe-href";
 
 // ─────────────────────────────────────────────────────────────────────
 // Types
@@ -28,7 +22,7 @@ type Provider = "google" | "github" | "microsoft";
 
 interface ConnectedAccount {
   id: string;
-  provider: Provider | "slack";
+  provider: Provider;
   account_id: string;
   account_email: string | null;
   account_name: string | null;
@@ -36,25 +30,6 @@ interface ConnectedAccount {
   expires_at: string | null;
   created_at: string;
   updated_at: string;
-}
-
-interface SlackInstall {
-  id: string;
-  team_id: string;
-  team_name: string;
-  installed_by_user_id: string | null;
-  created_at: string;
-}
-
-// Slack events are loaded best-effort for the admin panel below.
-interface SlackEvent {
-  id: string;
-  install_id: string | null;
-  event_type: string;
-  channel_id: string | null;
-  user_id: string | null;
-  handled: boolean;
-  received_at: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -145,17 +120,12 @@ const OAUTH_PROVIDERS: OauthProviderDescriptor[] = [
 // ─────────────────────────────────────────────────────────────────────
 
 export function ConnectedAccountsPage() {
-  const { user } = useAuth();
   const toast = useToast();
   const [search, setSearch] = useSearchParams();
   const oauthResult = search.get("oauth"); // 'ok' | 'failed' | 'denied'
-  const slackResult = search.get("slack"); // 'ok' | 'failed' | 'denied'
 
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([]);
-  const [slackInstalls, setSlackInstalls] = useState<SlackInstall[]>([]);
-  const [slackEvents, setSlackEvents] = useState<SlackEvent[]>([]);
   const [loading, setLoading] = useState(true);
-  const [slackUrl, setSlackUrl] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -164,23 +134,8 @@ export function ConnectedAccountsPage() {
     } catch {
       /* swallow — page still renders the empty grid */
     }
-    // Slack tiles are admin-only.
-    if (user?.role === "admin") {
-      try {
-        const ev = await apiGet<SlackEvent[]>("/slack/events?limit=10");
-        setSlackEvents(ev);
-      } catch {
-        /* swallow */
-      }
-      try {
-        const installs = await apiGet<SlackInstall[]>("/slack/installs");
-        setSlackInstalls(installs);
-      } catch {
-        /* swallow */
-      }
-    }
     setLoading(false);
-  }, [user?.role]);
+  }, []);
 
   useEffect(() => {
     reload();
@@ -210,29 +165,13 @@ export function ConnectedAccountsPage() {
         tone: "info",
       });
     }
-    if (slackResult === "ok") {
-      toast.addToast({
-        id: "slack-ok",
-        title: "Slack workspace connected",
-        description: "HELM will now receive events from that workspace.",
-        tone: "success",
-      });
-    } else if (slackResult === "failed" || slackResult === "denied") {
-      toast.addToast({
-        id: "slack-fail",
-        title: "Slack install failed",
-        description: "Check the API logs and your Slack app credentials.",
-        tone: "warning",
-      });
-    }
-    if (oauthResult || slackResult) {
+    if (oauthResult) {
       // Strip query params so a refresh doesn't re-fire the toast.
       const next = new URLSearchParams(search);
       next.delete("oauth");
-      next.delete("slack");
       setSearch(next, { replace: true });
     }
-  }, [oauthResult, slackResult, toast, search, setSearch]);
+  }, [oauthResult, toast, search, setSearch]);
 
   function disconnect(id: string, provider: string) {
     if (!confirm(`Disconnect the linked ${provider} account?`)) return;
@@ -260,36 +199,10 @@ export function ConnectedAccountsPage() {
     window.location.href = `/api/oauth/${provider}/start?link=1`;
   }
 
-  async function installSlack() {
-    try {
-      const res = await apiGet<{ url: string } | { error: string }>(
-        "/slack/install",
-      );
-      if ("error" in res) {
-        toast.addToast({
-          id: "slack-not-config",
-          title: "Slack not configured",
-          description: res.error,
-          tone: "warning",
-        });
-        return;
-      }
-      setSlackUrl(res.url);
-      window.location.href = safeLocationHref(res.url);
-    } catch (err) {
-      toast.addToast({
-        id: "slack-install-fail",
-        title: "Could not start install",
-        description: (err as Error).message,
-        tone: "warning",
-      });
-    }
-  }
-
   return (
-    <div className="p-6 max-w-[1000px] space-y-6">
+    <div className="content-page-sm space-y-6">
       <div>
-        <h2 className="font-display text-[20px] font-semibold text-text tracking-wide">
+        <h2 className="page-title">
           Connected accounts
         </h2>
         <div className="text-textMuted text-[13px]">
@@ -316,36 +229,6 @@ export function ConnectedAccountsPage() {
           );
         })}
       </section>
-
-      {user?.role === "admin" && (
-        <section className="space-y-3">
-          <div>
-            <h3 className="font-display text-[15px] font-semibold text-text">
-              Slack workspace
-            </h3>
-            <div className="text-textMuted text-[13px]">
-              Install HELM into a Slack workspace to receive inbound messages.
-              {slackUrl && (
-                <>
-                  {" "}
-                  <a
-                    className="text-brass hover:underline"
-                    href={safeHref(slackUrl)}
-                    rel="noreferrer"
-                  >
-                    resume install
-                  </a>
-                </>
-              )}
-            </div>
-          </div>
-          <SlackWorkspaceTile
-            installs={slackInstalls}
-            onInstall={installSlack}
-          />
-          <SlackEventsList events={slackEvents} loading={loading} />
-        </section>
-      )}
     </div>
   );
 }
@@ -432,136 +315,6 @@ function ProviderTile({
         >
           {linked.length > 0 ? "Connect another" : "Connect"}
         </Button>
-      </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// Slack workspace tile (admin)
-// ─────────────────────────────────────────────────────────────────────
-
-function SlackWorkspaceTile({
-  installs,
-  onInstall,
-}: {
-  installs: SlackInstall[];
-  onInstall: () => void;
-}) {
-  return (
-    <div className="border border-border bg-panel">
-      <div className="px-4 py-2 border-b border-borderSoft flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <span className="shrink-0 text-brass">
-            <SlackIcon size={18} />
-          </span>
-          <span className="font-display text-[14px] font-semibold text-text">
-            Slack
-          </span>
-          {installs.length > 0 ? (
-            <Badge tone="teal">
-              {installs.length} workspace{installs.length === 1 ? "" : "s"}
-            </Badge>
-          ) : (
-            <Badge tone="neutral">no workspace</Badge>
-          )}
-        </div>
-        <Button variant="primary" size="sm" onClick={onInstall}>
-          Add to Slack
-        </Button>
-      </div>
-      <div className="p-4 space-y-2">
-        {installs.length === 0 ? (
-          <div className="text-textMuted text-[12px]">
-            No workspace is connected yet. Click <em>Add to Slack</em> to begin
-            the install flow — you'll be sent to Slack to approve the scopes
-            HELM needs to receive events.
-          </div>
-        ) : (
-          <ul className="space-y-1.5">
-            {installs.map((i) => (
-              <li
-                key={i.id}
-                className="flex items-center justify-between gap-3 border border-borderSoft bg-panelAlt px-2 py-1.5"
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  <CallSign id={`SLK-${i.id.slice(0, 4).toUpperCase()}`} variant="muted" />
-                  <span className="font-mono text-[12px] text-text truncate">
-                    {i.team_name}
-                  </span>
-                  {i.team_id && (
-                    <span className="mono-caps text-[10px] text-textMuted truncate">
-                      {i.team_id}
-                    </span>
-                  )}
-                </div>
-                <span className="mono-caps text-[10px] text-textFaint shrink-0">
-                  {new Date(i.created_at).toLocaleDateString()}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// Slack events list (admin)
-// ─────────────────────────────────────────────────────────────────────
-
-function SlackEventsList({
-  events,
-  loading,
-}: {
-  events: SlackEvent[];
-  loading: boolean;
-}) {
-  return (
-    <div className="border border-border bg-panel">
-      <div className="px-4 py-2 border-b border-borderSoft flex items-center justify-between">
-        <span className="font-display text-[13px] font-semibold text-text">
-          Inbound events
-        </span>
-        <span className="mono-caps text-[10px] text-textMuted">
-          most recent {events.length}
-        </span>
-      </div>
-      <div className="divide-y divide-borderSoft">
-        {loading ? (
-          <div className="px-4 py-3 text-textFaint mono-caps text-[10px]">
-            loading…
-          </div>
-        ) : events.length === 0 ? (
-          <div className="px-4 py-3 text-textFaint mono-caps text-[10px]">
-            no events yet — send a message in the Slack workspace to see it
-            land here
-          </div>
-        ) : (
-          events.map((e) => (
-            <div key={e.id} className="px-4 py-2 flex items-center gap-3">
-              <CallSign id={`SLK-${e.id.slice(0, 4).toUpperCase()}`} variant="muted" />
-              <span className="font-mono text-[12px] text-text">{e.event_type}</span>
-              <span
-                className={cn(
-                  "mono-caps text-[10px]",
-                  e.handled ? "text-teal" : "text-textMuted",
-                )}
-              >
-                {e.handled ? "handled" : "pending"}
-              </span>
-              {e.channel_id && (
-                <span className="mono-caps text-[10px] text-textMuted truncate">
-                  #{e.channel_id}
-                </span>
-              )}
-              <span className="ml-auto mono-caps text-[10px] text-textFaint">
-                {new Date(e.received_at).toLocaleString()}
-              </span>
-            </div>
-          ))
-        )}
       </div>
     </div>
   );

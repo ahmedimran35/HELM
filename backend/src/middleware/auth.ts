@@ -123,13 +123,25 @@ export function parseSessionCookie(header: string): string | null {
     // `__Host-helm_sid=` name the serializer emits, which broke auth
     // entirely on direct-TLS deployments.
     if (part.startsWith(`${cookieName}=`)) {
-      return decodeURIComponent(part.slice(cookieName.length + 1));
+      return safeDecode(part.slice(cookieName.length + 1));
     }
     if (part.startsWith(`__Host-${cookieName}=`)) {
-      return decodeURIComponent(part.slice(`__Host-${cookieName}`.length + 1));
+      return safeDecode(part.slice(`__Host-${cookieName}`.length + 1));
     }
   }
   return null;
+}
+
+// decodeURIComponent throws on a malformed percent-sequence (e.g. a
+// cookie value of "%zz" or a truncated "%E2"). A hostile client can send
+// such a cookie and would otherwise 500 the auth middleware. Treat any
+// decode failure as "no session" instead.
+function safeDecode(raw: string): string | null {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
 }
 
 export function serializeSessionCookie(sessionId: string, opts: { maxAge: number; secure: boolean }): string {

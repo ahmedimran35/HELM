@@ -399,7 +399,10 @@ export function PanelsPage() {
     });
   }
 
-  // WebSocket subscription while a panel is active.
+  // WebSocket subscription while a panel is active. Includes reconnect:
+  // a dropped socket (backend restart, network blip) would otherwise
+  // leave the panel chat dead until a manual refresh, because onclose
+  // only nulled wsRef and never re-opened.
   useEffect(() => {
     if (!active || !user?.id) return;
     const url = buildPanelWsUrl(active);
@@ -408,23 +411,38 @@ export function PanelsPage() {
       // a socket the server would 403 on anyway.
       return;
     }
-    const ws = new WebSocket(url);
-    wsRef.current = ws;
-    // Server already authed us from the helm_sid cookie on upgrade
-    // (SameSite=Strict + __Host- prefix means only same-origin
-    // requests can ever attach it). Send a `ping` after open so we
-    // immediately verify round-trip reachability + keepalive cadence.
-    ws.onopen = () => {
+    let ws: WebSocket;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let disposed = false; // set on cleanup so a pending reconnect doesn't fire
+
+    const connect = () => {
+      if (disposed) return;
+      ws = new WebSocket(url);
+      wsRef.current = ws;
+      // Server already authed us from the helm_sid cookie on upgrade
+      // (SameSite=Strict + __Host- prefix means only same-origin
+      // requests can ever attach it). Send a `ping` after open so we
+      // immediately verify round-trip reachability + keepalive cadence.
+      ws.onopen = () => {
+        try {
+          ws.send(JSON.stringify({ type: "ping" }));
+        } catch {
+          /* server still got our upgrade + auth; non-fatal */
+        }
+      };
+      ws.onmessage = (ev) => {
       try {
-        ws.send(JSON.stringify({ type: "ping" }));
-      } catch {
-        /* server still got our upgrade + auth; non-fatal */
-      }
-    };
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(String(ev.data));
-        if (msg.type === "message") {
+        const parsed = JSON.parse(String(ev.data));
+        // The server coalesces multiple frames within a 30 ms window
+        // into a single JSON *array* (see ws.ts flushPanel). Handle both
+        // the single-object fast path and the batched array so a burst of
+        // `message` + `typing` + `token` frames is never silently dropped.
+        // Each element may itself be a JSON string (defensive against any
+        // double-encoded envelope), so re-parse string elements.
+        const rawFrames = Array.isArray(parsed) ? parsed : [parsed];
+        for (const raw of rawFrames) {
+          const msg = typeof raw === "string" ? JSON.parse(raw) : raw;
+          if (msg.type === "message") {
           setAgentThinking(false);
           setMessages((prev) => {
             const withoutDup = prev.filter(
@@ -446,7 +464,10 @@ export function PanelsPage() {
           // (msg.userId set) from "the agent is composing" (no userId).
           // The agent case is handled by the same logic as before; the
           // human case adds a small "X is typing…" hint in the chat.
-          if (msg.userId) {
+          if (msg.userId && msg.userId !== user?.id) {
+            // Skip our own echo: the server rebroadcasts our typing
+            // beacon to the whole panel *including us*, and showing
+            // "you are typing…" to yourself is noise.
             setHumanTypers((cur) => {
               const next = new Set(cur);
               next.add(msg.userId);
@@ -460,7 +481,7 @@ export function PanelsPage() {
                 return next;
               });
             }, 6000);
-          } else {
+          } else if (!msg.userId) {
             setAgentThinking(true);
           }
         } else if (msg.type === "token" && typeof msg.delta === "string") {
@@ -498,16 +519,36 @@ export function PanelsPage() {
             }),
           );
         }
+        }
       } catch {
         /* ignore */
       }
+      };
+      ws.onclose = () => {
+        // Only clear the ref if this socket is still the live one. When
+        // switching panels, the OLD socket's close event fires ~10ms
+        // AFTER the new effect already assigned the new socket — a bare
+        // `wsRef.current = null` here would stomp it and leave the
+        // composer convinced we're still reconnecting.
+        if (wsRef.current === ws) wsRef.current = null;
+        // Reconnect with a short backoff unless the effect is being
+        // torn down (panel switched / unmounted).
+        if (disposed) return;
+        reconnectTimer = setTimeout(connect, 1000);
+      };
     };
-    ws.onclose = () => {
-      wsRef.current = null;
-    };
+    connect();
     return () => {
-      ws.close();
-      wsRef.current = null;
+      disposed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      // Same identity guard as onclose: if a newer effect instance has
+      // already replaced the ref, don't null it from this old closure.
+      if (wsRef.current === ws) wsRef.current = null;
+      try {
+        ws.close();
+      } catch {
+        /* already closed */
+      }
     };
   }, [active, user?.id]);
 
@@ -556,24 +597,74 @@ export function PanelsPage() {
   }
 
   async function send() {
-    if (!active || !input.trim() || !wsRef.current) return;
+    if (!active || !input.trim()) return;
+    // Don't clear the input if we can't actually send — otherwise the
+    // user's message silently vanishes when the socket is dead. If the
+    // socket is CONNECTING (e.g. right after a panel switch, when the
+    // old socket is closed and a new one is still handshaking), WAIT
+    // for it to open and send then — the handshake takes ~100-300 ms,
+    // far faster than retyping. Only a fully dead socket (CLOSED/
+    // CLOSING/null) surfaces the toast.
+    const wsNow = wsRef.current;
+    const state = wsNow?.readyState;
+    if (!wsNow || state === WebSocket.CLOSING || state === WebSocket.CLOSED) {
+      addToast({
+        id: `panel-send-${Date.now()}`,
+        title: "Reconnecting…",
+        description: "The panel connection is reconnecting — try again in a moment.",
+        tone: "warning",
+        duration: 3000,
+      });
+      return;
+    }
     const content = input.trim();
-    setInput("");
-    setMentionOpen(false);
-    const previousMentionId = mentionedModelId;
-    setMentionedModelId(null);
-    setLastPickedExternalId(null);
     // Validate against the same schema the server enforces — never
-    // ship a frame that the server would silently drop.
+    // ship a frame that the server would silently drop. Built BEFORE
+    // any await so the mention id can't change underneath us.
     const payload = buildOutboundFrame({
       type: "send",
       content,
-      ...(previousMentionId ? { mentioned_model_id: previousMentionId } : {}),
+      ...(mentionedModelId ? { mentioned_model_id: mentionedModelId } : {}),
     });
     if (!payload) return;
-    if (wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (wsNow.readyState === WebSocket.CONNECTING) {
+      // Queue until open. Set up the waiter before clearing input so a
+      // failed wait leaves everything (text + mention) untouched.
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error("timeout")), 3000);
+          wsNow.addEventListener("open", () => { clearTimeout(timer); resolve(); }, { once: true });
+          wsNow.addEventListener("close", () => { clearTimeout(timer); reject(new Error("closed")); }, { once: true });
+        });
+      } catch {
+        addToast({
+          id: `panel-send-${Date.now()}`,
+          title: "Reconnecting…",
+          description: "The panel connection is reconnecting — try again in a moment.",
+          tone: "warning",
+          duration: 3000,
+        });
+        return;
+      }
+      // Re-verify: effect cleanup may have swapped the socket mid-wait.
+      const fresh = wsRef.current;
+      if (!fresh || fresh.readyState !== WebSocket.OPEN) {
+        addToast({
+          id: `panel-send-${Date.now()}`,
+          title: "Reconnecting…",
+          description: "The panel connection is reconnecting — try again in a moment.",
+          tone: "warning",
+          duration: 3000,
+        });
+        return;
+      }
+    }
+    setInput("");
+    setMentionOpen(false);
+    setMentionedModelId(null);
+    setLastPickedExternalId(null);
     try {
-      wsRef.current.send(payload);
+      wsRef.current?.send(payload);
     } catch {
       /* socket died between readyState check and send() — ignore */
     }
@@ -1503,7 +1594,7 @@ function MentionPicker({
   if (filtered.length === 0) {
     return (
       <div className="absolute bottom-full left-0 right-0 mb-2 z-20">
-        <div className="bg-panel border border-borderSoft rounded-none shadow-xl px-4 py-3">
+        <div className="bg-panel border border-borderSoft rounded-lg shadow-xl px-4 py-3">
           <div className="flex items-center gap-2">
             <span className="font-mono text-[12px] text-textFaint">@</span>
             <span className="font-mono text-[12px] text-text">{query || "…"}</span>
@@ -1543,7 +1634,7 @@ function MentionPicker({
                 }`}
               >
                 <span
-                  className="w-2 h-8 rounded-none shrink-0"
+                  className="w-2 h-8 rounded-sm shrink-0"
                   style={{ backgroundColor: providerColor }}
                   title={m.provider_type}
                 />

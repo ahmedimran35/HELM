@@ -6,6 +6,7 @@ import { Input } from "../components/ui/Input";
 import { CallSign } from "../components/ui/CallSign";
 import { Badge } from "../components/ui/Badge";
 import { Skeleton } from "../components/ui/feedback/Skeleton";
+import { BootSequence } from "../components/system/BootSequence";
 
 /**
  * Login — single page for everyone. The same form serves admin and user;
@@ -20,17 +21,23 @@ export function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Boot sequence plays between successful login and app handoff.
+  const [booting, setBooting] = useState(false);
+  const [bootRole, setBootRole] = useState("user");
 
   // If somehow already logged in, send to the app. The redirect must run
   // in an effect — calling navigate during render triggers a "Cannot
   // update a component while rendering a different component" warning.
+  // While `booting` is true the boot sequence owns navigation: setUser in
+  // login() would otherwise fire this effect and unmount the overlay in
+  // the same React batch that starts it.
   useEffect(() => {
-    if (user) {
+    if (user && !booting) {
       navigate(user.must_change_password ? "/change-password" : "/", {
         replace: true,
       });
     }
-  }, [user, navigate]);
+  }, [user, booting, navigate]);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -38,14 +45,29 @@ export function LoginPage() {
     setSubmitting(true);
     try {
       const u = await login(username.trim(), password);
-      navigate(u.must_change_password ? "/change-password" : "/", {
-        replace: true,
-      });
+      // Play the boot sequence, then navigate on its completion. The
+      // must-change-password gate skips the ceremony — get them to the
+      // password form instead.
+      if (u.must_change_password) {
+        navigate("/change-password", { replace: true });
+        return;
+      }
+      setBootRole(u.role);
+      setBooting(true);
     } catch (err) {
       setError((err as Error).message || "Login failed");
-    } finally {
       setSubmitting(false);
     }
+  }
+
+  if (booting) {
+    return (
+      <BootSequence
+        role={bootRole}
+        theme={document.documentElement.dataset.theme ?? "system"}
+        onDone={() => navigate("/", { replace: true })}
+      />
+    );
   }
 
   return (

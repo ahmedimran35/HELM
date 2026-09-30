@@ -373,7 +373,7 @@ function labelFor(step: Step): string {
 function Step0Welcome() {
   return (
     <div>
-      <h2 className="font-display text-[22px] font-semibold text-text leading-tight">
+      <h2 className="page-title leading-tight">
         Welcome to HELM.
       </h2>
       <p className="mt-2 text-[13px] text-textMuted max-w-[60ch] leading-[1.55]">

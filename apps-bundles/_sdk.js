@@ -62,11 +62,20 @@
   // Request/response bridge for privileged API calls via postMessage.
   // The host (AppFrame) proxies requests and replies with
   // { type: "helm:api-response", id, status, body }.
+  // Unpredictable request ids so a hostile same-origin page cannot race
+  // a forged response against an in-flight request (the old
+  // Date.now()+counter scheme was guessable).
+  function newRequestId(prefix) {
+    var u = (window.crypto && window.crypto.randomUUID)
+      ? window.crypto.randomUUID()
+      : (Date.now().toString(36) + "-" + Math.random().toString(36).slice(2) + "-" + (++apiRequestId));
+    return prefix + "-" + u;
+  }
   var apiRequestId = 0;
   var apiPromises = {};
   function callApiViaBridge(method, path, body) {
     return new Promise(function (resolve, reject) {
-      var id = "api-" + Date.now() + "-" + (++apiRequestId);
+      var id = newRequestId("api");
       var timeout = setTimeout(function () {
         delete apiPromises[id];
         reject(new Error("api_bridge_timeout"));
@@ -78,7 +87,7 @@
 
   function callAppDataViaBridge(op, key, value) {
     return new Promise(function (resolve, reject) {
-      var id = "appdata-" + Date.now() + "-" + (++apiRequestId);
+      var id = newRequestId("appdata");
       var timeout = setTimeout(function () {
         delete apiPromises[id];
         reject(new Error("app_data_bridge_timeout"));
@@ -91,6 +100,11 @@
   window.addEventListener("message", function (ev) {
     var data = ev.data;
     if (!data || typeof data !== "object") return;
+    // Only accept bridge responses from the actual parent frame. The
+    // iframe runs on an opaque origin (no allow-same-origin), so the
+    // parent is the only legitimate responder; a response from any other
+    // source is ignored.
+    if (ev.source !== window.parent) return;
     // Response to our api/app-data bridge request.
     if (data.type === "helm:api-response" || data.type === "helm:app-data-response") {
       var promise = apiPromises[data.id];

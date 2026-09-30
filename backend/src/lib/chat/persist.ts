@@ -158,6 +158,13 @@ export interface PostTurnInputs {
   completionTokens: number;
   latencyMs: number;
   assistantMessageId: string | undefined;
+  cacheVariant?: string;
+  /** Set when the turn ran inside a panel — lets the perf dashboard
+   *  attribute usage per panel instead of bucketing it as "unknown". */
+  panelId?: string;
+  /** Error message when the turn failed — flips the harness_runs row
+   *  to status 'error' so the perf dashboard's error rate is accurate. */
+  errorMessage?: string;
 }
 
 /** Run every post-stream side-effect: harness_runs row, chat_assistant_message
@@ -181,14 +188,18 @@ export async function runPostTurnBookkeeping(
     completionTokens,
     latencyMs,
     assistantMessageId,
+    panelId,
+    errorMessage,
   } = inputs;
   // Audit every harness invocation (P2). Best-effort — never
   // breaks the request. Includes the harness kind so the admin
-  // Logs view can split by runtime.
+  // Logs view can split by runtime. The panel id (when the turn
+  // ran in a panel) feeds the per-panel usage rollup.
   await sql`
-    INSERT INTO harness_runs (user_id, harness, model, prompt_tokens, completion_tokens, latency_ms, status)
-    VALUES (${userId}::uuid, ${harnessKind}, ${externalId},
-            ${promptTokens ?? 0}, ${completionTokens}, ${latencyMs}, 'ok')
+    INSERT INTO harness_runs (user_id, panel_id, harness, model, prompt_tokens, completion_tokens, latency_ms, status, error)
+    VALUES (${userId}::uuid, ${panelId ?? null}::uuid, ${harnessKind}, ${externalId},
+            ${promptTokens ?? 0}, ${completionTokens}, ${latencyMs},
+            ${errorMessage ? "error" : "ok"}, ${errorMessage ?? null})
   `.catch((err) => rawConsole.warn("[chat] harness_runs insert failed:", (err as Error).message));
   await logAudit({
     userId,
@@ -228,7 +239,7 @@ export async function runPostTurnBookkeeping(
   // hits. Scoped by user id so the same query from a different
   // user can't poison this user's cache. Fire-and-forget; never
   // breaks the stream.
-  void chatStoreCached(query, assembled, externalId, userId);
+  void chatStoreCached(query, assembled, externalId, userId, inputs.cacheVariant);
 
   // Tier 6 — self-test (fire-and-forget). The judge grades the
   // assistant reply in the background so we don't slow down the
@@ -247,7 +258,7 @@ export async function runPostTurnBookkeeping(
   }
 }
 
-/** Record a failed turn so the audit log shows dropped calls too.
+/** Record a failed turn so the perf dashboard shows dropped calls too.
  *  We don't have a completion token count or full prompt tokens,
  *  so write zeros. */
 export async function recordFailedTurn(inputs: {
@@ -256,10 +267,11 @@ export async function recordFailedTurn(inputs: {
   externalId: string;
   latencyMs: number;
   errorMessage: string;
+  panelId?: string;
 }): Promise<void> {
   await sql`
-    INSERT INTO harness_runs (user_id, harness, model, prompt_tokens, completion_tokens, latency_ms, status, error)
-    VALUES (${inputs.userId}::uuid, ${inputs.harnessKind}, ${inputs.externalId},
+    INSERT INTO harness_runs (user_id, panel_id, harness, model, prompt_tokens, completion_tokens, latency_ms, status, error)
+    VALUES (${inputs.userId}::uuid, ${inputs.panelId ?? null}::uuid, ${inputs.harnessKind}, ${inputs.externalId},
             0, 0, ${inputs.latencyMs}, 'error', ${inputs.errorMessage})
   `.catch((err) => rawConsole.warn("[chat] harness_runs error insert failed:", (err as Error).message));
 }

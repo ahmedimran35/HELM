@@ -42,6 +42,9 @@ const SandboxPage = lazy(() =>
 const WatchesPage = lazy(() =>
   import("./pages/Watches").then((m) => ({ default: m.WatchesPage })),
 );
+const SwarmLabPage = lazy(() =>
+  import("./pages/SwarmLab").then((m) => ({ default: m.SwarmLabPage })),
+);
 const AnalyticsPage = lazy(() =>
   import("./pages/Analytics").then((m) => ({ default: m.AnalyticsPage })),
 );
@@ -50,16 +53,6 @@ const RequestsPage = lazy(() =>
 );
 const ProvidersPage = lazy(() =>
   import("./pages/Providers").then((m) => ({ default: m.ProvidersPage })),
-);
-const IntegrationsPage = lazy(() =>
-  import("./pages/Integrations").then((m) => ({
-    default: m.IntegrationsPage,
-  })),
-);
-const MemoryStrategiesPage = lazy(() =>
-  import("./pages/MemoryStrategies").then((m) => ({
-    default: m.MemoryStrategiesPage,
-  })),
 );
 const ConnectedAccountsPage = lazy(() =>
   import("./pages/ConnectedAccounts").then((m) => ({
@@ -75,19 +68,11 @@ const AppsPage = lazy(() =>
 const SkillsPage = lazy(() =>
   import("./pages/Skills").then((m) => ({ default: m.SkillsPage })),
 );
-const FeedbackPage = lazy(() =>
-  import("./pages/Feedback").then((m) => ({ default: m.FeedbackPage })),
-);
 const MarketplacePage = lazy(() =>
   import("./pages/Marketplace").then((m) => ({ default: m.MarketplacePage })),
 );
 const SearchPage = lazy(() =>
   import("./pages/Search").then((m) => ({ default: m.SearchPage })),
-);
-const KnowledgeGraphPage = lazy(() =>
-  import("./pages/KnowledgeGraph").then((m) => ({
-    default: m.KnowledgeGraphPage,
-  })),
 );
 const WorkflowsPage = lazy(() =>
   import("./pages/Workflows").then((m) => ({ default: m.WorkflowsPage })),
@@ -108,17 +93,11 @@ const ReplayPage = lazy(() =>
 const SetupPage = lazy(() =>
   import("./pages/Setup").then((m) => ({ default: m.SetupPage })),
 );
-const StatusPage = lazy(() =>
-  import("./pages/Status").then((m) => ({ default: m.StatusPage })),
-);
 const SpendCapsPage = lazy(() =>
   import("./pages/SpendCaps").then((m) => ({ default: m.SpendCapsPage })),
 );
 const HealthPage = lazy(() =>
   import("./pages/Health").then((m) => ({ default: m.HealthPage })),
-);
-const PerfPage = lazy(() =>
-  import("./pages/Perf").then((m) => ({ default: m.PerfPage })),
 );
 
 import { NAV_ITEMS } from "./nav/items";
@@ -181,6 +160,8 @@ function NavRoute({ path }: { path: string }) {
       return <WorkspacePage />;
     case "/sandbox":
       return <SandboxPage />;
+    case "/swarm":
+      return <SwarmLabPage />;
     case "/watches":
       return <WatchesPage />;
     case "/workflows":
@@ -193,26 +174,16 @@ function NavRoute({ path }: { path: string }) {
       return <RequestsPage />;
     case "/providers":
       return <ProvidersPage />;
-    case "/integrations":
-      return <IntegrationsPage />;
-    case "/memory-strategies":
-      return <MemoryStrategiesPage />;
     case "/connected-accounts":
       return <ConnectedAccountsPage />;
     case "/apps":
       return <AppsPage />;
     case "/skills":
       return <SkillsPage />;
-    case "/feedback":
-      return <FeedbackPage />;
     case "/approvals":
       return <ApprovalsPage />;
-    case "/status":
-      return <StatusPage />;
     case "/spend-caps":
       return <SpendCapsPage />;
-    case "/perf":
-      return <PerfPage />;
     case "/health":
       return <HealthPage />;
     // Tier 4 — Discovery
@@ -220,8 +191,6 @@ function NavRoute({ path }: { path: string }) {
       return <MarketplacePage />;
     case "/search":
       return <SearchPage />;
-    case "/kg":
-      return <KnowledgeGraphPage />;
     case "/settings":
       return <SettingsPage />;
     default:
@@ -268,7 +237,7 @@ export function App() {
   // need router context (CommandPalette calls useNavigate inside its portal,
   // and WorkspaceHeader's search trigger navigates as well).
   return (
-    <BrowserRouter>
+    <BrowserRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
       <AuthProvider>
         <ToastProvider>
           <CommandPaletteProvider>

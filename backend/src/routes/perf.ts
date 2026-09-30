@@ -95,16 +95,11 @@ router.get("/", async (c) => {
     WHERE ${whereUser} AND hr.created_at > now() - interval '30 days'
   `;
 
-  // Tokens per turn.
+  // Tokens per turn — mean per RUN (prompt + completion), not per day.
   const tokensPerTurnRows = await sql<{ avg: number }[]>`
-    SELECT COALESCE(AVG(total), 0)::numeric(12, 2)::float AS avg
-    FROM (
-      SELECT date_trunc('day', created_at) AS bucket,
-             SUM(prompt_tokens + completion_tokens) AS total
-      FROM harness_runs hr
-      WHERE ${whereUser} AND created_at > now() - interval '30 days'
-      GROUP BY bucket
-    ) sub
+    SELECT COALESCE(AVG(prompt_tokens + completion_tokens), 0)::numeric(12, 2)::float AS avg
+    FROM harness_runs hr
+    WHERE ${whereUser} AND created_at > now() - interval '30 days' AND status = 'ok'
   `;
 
   // Latency timeseries — hourly buckets for the last 24h.
@@ -138,6 +133,16 @@ router.get("/", async (c) => {
     GROUP BY p.id, p.name ORDER BY runs DESC LIMIT 8
   `;
 
+  // Run origin split — direct chat vs panel turns.
+  const originRows = await sql<{ origin: string; runs: number; tokens: number }[]>`
+    SELECT CASE WHEN hr.panel_id IS NULL THEN 'chat' ELSE 'panel' END AS origin,
+           COUNT(*)::int AS runs,
+           COALESCE(SUM(hr.prompt_tokens + hr.completion_tokens), 0)::int AS tokens
+    FROM harness_runs hr
+    WHERE ${whereUser} AND hr.created_at > now() - interval '30 days'
+    GROUP BY origin
+  `;
+
   const stats = await cacheHitStats(user.id);
   const caps = await listSpendCapsForUser(user.id, isAdmin);
 
@@ -153,6 +158,7 @@ router.get("/", async (c) => {
     latency_series: latencyRows,
     top_models: topModels,
     per_panel: panelRows,
+    origins: originRows,
     spend_caps: caps,
   });
 });

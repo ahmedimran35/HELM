@@ -1,9 +1,9 @@
 // Home — post-login dashboard (logged in) OR public landing page (logged
-// out). Tier 7 adds the public landing variant: hero, feature grid, two
-// testimonials, and a CTA that sends the visitor to /setup (if first
-// boot) or /login.
+// out). The dashboard polls live endpoints every 30s: /perf for latency,
+// tokens, runs and cost; governance analytics for the hourly message
+// series and per-model spend; /api/swarm/runs for recent swarm runs.
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { apiGet } from "../api/client";
@@ -11,7 +11,8 @@ import { Avatar } from "../components/ui/Avatar";
 import { Button } from "../components/ui/Button";
 import { EmptyState } from "../components/ui/feedback/EmptyState";
 import { Skeleton, SkeletonText } from "../components/ui/feedback/Skeleton";
-import { StatTile } from "../components/ui/data/charts";
+import { BarChart, LineChart, StatTile } from "../components/ui/data/charts";
+import type { BarDatum, LineDatum } from "../components/ui/data/charts";
 import { StatusPill } from "../components/ui/feedback/StatusPill";
 import { CallSign } from "../components/ui/CallSign";
 import {
@@ -31,6 +32,10 @@ import {
   TerminalIcon,
   AppWindowIcon,
   LayoutIcon,
+  GaugeIcon,
+  LayersIcon,
+  RefreshIcon,
+  GraphIcon,
 } from "../components/ui/Icon";
 import { useCommandPalette } from "../components/system/CommandPalette";
 import { useToast } from "../components/ui/feedback/Toast";
@@ -42,31 +47,48 @@ interface PanelSummary {
   message_count: number;
 }
 
-interface ModelRow {
-  id: string;
-  display_name: string;
-  assigned: boolean;
-  pending_request: boolean;
-}
-
 interface SandboxState {
   status: string;
   cpu_pct: string;
   mem_pct: string;
 }
 
-interface Analytics {
-  spend_by_model: Array<{ display_name: string; total: number }>;
-  messages_over_time: Array<{ ts: string; count: number }>;
+// /perf — admin sees workspace-wide, non-admin sees own usage.
+interface Perf {
+  avg_latency_ms: number;
+  p95_latency_ms: number;
+  total_tokens: number;
+  total_runs: number;
+  error_runs: number;
+  total_cost_cents: number;
+  tokens_per_turn: number;
+  latency_series: Array<{ bucket: string; avg_ms: number }>;
+  top_models: Array<{ model: string; runs: number; tokens: number }>;
+  origins: Array<{ origin: string; runs: number; tokens: number }>;
+  cache: { total_rows: number; total_hits: number; hit_rate: number };
 }
 
-interface AuditRow {
-  id: number;
-  ts: string;
-  user_name: string;
-  action: string;
-  target: string;
-  tokens: number | null;
+// Governance analytics (admin-only). spend rows are {model_id, model_name,
+// spend, tokens} with spend a numeric string; messages rows {bucket, count}.
+interface SpendRow {
+  model_id: string | null;
+  model_name: string | null;
+  spend: string | number;
+  tokens: number;
+}
+interface MsgBucket {
+  bucket: string;
+  count: number;
+}
+
+interface SwarmRunRow {
+  id: string;
+  question: string;
+  status: string;
+  models: Array<{ model_id: string; external_id?: string; label?: string }> | null;
+  rounds_completed: number;
+  created_at: string;
+  completed_at: string | null;
 }
 
 interface SetupStatus {
@@ -75,94 +97,100 @@ interface SetupStatus {
   providers: number;
 }
 
+const POLL_MS = 30_000;
+
 export function HomePage() {
   const { user } = useAuth();
   const { open: openPalette } = useCommandPalette();
   const { addToast } = useToast();
   const navigate = useNavigate();
   const [panels, setPanels] = useState<PanelSummary[] | null>(null);
-  const [, setModels] = useState<ModelRow[] | null>(null);
   const [sandbox, setSandbox] = useState<SandboxState | null>(null);
-  const [analytics, setAnalytics] = useState<Analytics | null>(null);
-  const [activity, setActivity] = useState<AuditRow[] | null>(null);
+  const [perf, setPerf] = useState<Perf | null>(null);
+  const [spend, setSpend] = useState<SpendRow[] | null>(null);
+  const [msgs, setMsgs] = useState<MsgBucket[] | null>(null);
+  const [swarm, setSwarm] = useState<SwarmRunRow[] | null>(null);
+  const [lastLoaded, setLastLoaded] = useState<number | null>(null);
 
   const isAdmin = user?.role === "admin";
 
-  useEffect(() => {
+  const load = useCallback(() => {
     apiGet<PanelSummary[]>("/panels").then(setPanels).catch(() => setPanels([]));
-    apiGet<ModelRow[]>("/models").then(setModels).catch(() => setModels([]));
     if (user?.id) {
       apiGet<SandboxState>("/workspace/sandbox")
         .then(setSandbox)
         .catch(() => setSandbox(null));
     }
+    // /perf is live for every role (admin = workspace-wide).
+    apiGet<Perf>("/perf")
+      .then((p) => {
+        setPerf(p);
+        setLastLoaded(Date.now());
+      })
+      .catch(() => setPerf((cur) => cur));
+    apiGet<{ runs: SwarmRunRow[] }>("/swarm/runs")
+      .then((r) => setSwarm(r.runs ?? []))
+      .catch(() => setSwarm([]));
     if (isAdmin) {
-      apiGet<Array<{ display_name: string; total: number }>>(
-        "/governance/analytics/spend-by-model",
-      )
-        .then((rows) =>
-          setAnalytics((cur) => ({
-            spend_by_model: rows,
-            messages_over_time: cur?.messages_over_time ?? [],
-          })),
-        )
-        .catch(() => {});
-      apiGet<Array<{ ts: string; count: number }>>(
-        "/governance/analytics/messages-over-time",
-      )
-        .then((rows) =>
-          setAnalytics((cur) => ({
-            spend_by_model: cur?.spend_by_model ?? [],
-            messages_over_time: rows,
-          })),
-        )
-        .catch(() => {});
-    }
-    if (isAdmin) {
-      apiGet<{ rows: AuditRow[] }>("/logs/activity?limit=10")
-        .then((r) => setActivity(r.rows ?? []))
-        .catch(() => setActivity([]));
-    } else {
-      setActivity([]);
+      apiGet<SpendRow[]>("/governance/analytics/spend-by-model")
+        .then(setSpend)
+        .catch(() => setSpend([]));
+      apiGet<MsgBucket[]>("/governance/analytics/messages-over-time")
+        .then(setMsgs)
+        .catch(() => setMsgs([]));
     }
   }, [user?.id, isAdmin]);
 
-  const totalSpend = useMemo(
-    () =>
-      (analytics?.spend_by_model ?? []).reduce(
-        (acc, m) => acc + (Number.isFinite(m.total) ? m.total : 0),
-        0,
-      ),
-    [analytics],
+  useEffect(() => {
+    load();
+    const t = setInterval(load, POLL_MS);
+    return () => clearInterval(t);
+  }, [load]);
+
+  const totalSpendUsd = useMemo(() => {
+    if (perf && perf.total_cost_cents > 0) return perf.total_cost_cents / 100;
+    return (spend ?? []).reduce((acc, m) => acc + Number(m.spend || 0), 0);
+  }, [perf, spend]);
+
+  // Hourly messages over the last 24h, labelled 0h..23h ago.
+  const msgSeries: LineDatum[] = useMemo(() => {
+    if (!msgs) return [];
+    return msgs.map((p, i, arr) => ({
+      label: i === arr.length - 1 ? "now" : `${arr.length - 1 - i}h ago`,
+      value: p.count,
+    }));
+  }, [msgs]);
+
+  const msgTotal24h = useMemo(
+    () => msgSeries.reduce((a, b) => a + b.value, 0),
+    [msgSeries],
   );
 
-  // Compose per-day message series for the sparkline (last 14d if possible).
-  const msgSpark = useMemo(() => {
-    const counts = analytics?.messages_over_time ?? [];
-    return counts.slice(-14).map((p) => (Number.isFinite(p.count) ? p.count : 0));
-  }, [analytics]);
+  // Top models by tokens — bar chart.
+  const modelBars: BarDatum[] = useMemo(() => {
+    if (!perf?.top_models) return [];
+    return perf.top_models.slice(0, 6).map((m) => ({
+      label: m.model.split("/").pop() ?? m.model,
+      value: m.tokens,
+      display: `${m.tokens.toLocaleString()} tok`,
+      secondary: `${m.runs} runs`,
+    }));
+  }, [perf]);
 
-  // Spend trend (cumulative over time would need more data; show per-model
-  // spend sorted, then take top-3 for a quick visual).
-  const spendSpark = useMemo(() => {
-    if (!analytics) return [];
-    const sorted = [...analytics.spend_by_model]
-      .filter((m) => Number.isFinite(m.total))
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 8)
-      .map((m) => m.total);
-    return sorted;
-  }, [analytics]);
+  const errRate =
+    perf && perf.total_runs > 0
+      ? Math.round((perf.error_runs / perf.total_runs) * 100)
+      : 0;
 
   if (!user) return <PublicLandingPage />;
   const greeting = greetingFor(new Date());
 
   return (
-    <div className="p-6 max-w-[1100px] space-y-6">
-      {/* Greeting + role + last-seen */}
+    <div className="content-page space-y-6">
+      {/* Greeting + live pulse */}
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
-          <h2 className="font-display text-[26px] font-semibold text-text leading-tight">
+          <h2 className="page-title">
             {greeting}, {user.name}.
           </h2>
           <p className="mt-1 text-[13px] text-textMuted">
@@ -174,54 +202,175 @@ export function HomePage() {
               className="text-textMuted hover:text-brass underline-offset-2 hover:underline"
             >
               search any panel, model, or user
-            </button>
-            {" "}
-            with <kbd className="mono-caps text-[10px] border border-borderSoft px-1 h-[14px] inline-flex items-center">⌘K</kbd>
+            </button>{" "}
+            with{" "}
+            <kbd className="mono-caps text-[10px] border border-borderSoft px-1 h-[14px] inline-flex items-center">
+              ⌘K
+            </kbd>
           </p>
         </div>
-        <StatusPill
-          state={sandbox?.status === "running" ? "healthy" : sandbox?.status === "stopped" ? "idle" : "unknown"}
-          label={sandbox?.status ?? "sandbox"}
-          meta={sandbox ? `${Number(sandbox.cpu_pct).toFixed(1)}% cpu` : undefined}
-        />
+        <div className="flex items-center gap-3">
+          {lastLoaded !== null && (
+            <span className="mono-caps text-[10px] text-textFaint tracking-wider flex items-center gap-1.5">
+              <RefreshIcon size={10} className="text-teal" />
+              live · refreshed{" "}
+              {new Date(lastLoaded).toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </span>
+          )}
+          <StatusPill
+            state={
+              sandbox?.status === "running"
+                ? "healthy"
+                : sandbox?.status === "stopped"
+                  ? "idle"
+                  : "unknown"
+            }
+            label={sandbox?.status ?? "sandbox"}
+            meta={
+              sandbox
+                ? `${Number(sandbox.cpu_pct).toFixed(1)}% cpu · ${Number(sandbox.mem_pct).toFixed(1)}% mem`
+                : undefined
+            }
+          />
+        </div>
       </div>
 
-      {/* Stat tiles */}
+      {/* Stat tiles — all live */}
       <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatTile
-          label="panels"
-          value={panels === null ? "…" : panels.length}
-          tone="brass"
-          icon={<PanelsIcon size={16} />}
-          hint={isAdmin ? "across the workspace" : "you belong to"}
-        />
-        <StatTile
           label="messages"
-          value={msgSpark.length > 0 ? msgSpark.reduce((a, b) => a + b, 0) : 0}
+          countUp={msgTotal24h}
           tone="teal"
           icon={<ChatIcon size={16} />}
-          spark={msgSpark}
+          spark={msgSeries.map((d) => d.value)}
           hint="last 24h"
         />
         <StatTile
-          label="sandbox"
-          value={sandbox?.status ?? "—"}
-          tone={sandbox?.status === "running" ? "teal" : "rust"}
-          icon={<DatabaseIcon size={16} />}
+          label="spend"
+          countUp={Number.isFinite(totalSpendUsd) ? totalSpendUsd : 0}
+          format={(n) => `$${n.toFixed(2)}`}
+          tone="brass"
+          icon={<DollarSignIcon size={16} />}
           hint={
-            sandbox
-              ? `cpu ${Number(sandbox.cpu_pct).toFixed(1)}% · mem ${Number(sandbox.mem_pct).toFixed(1)}%`
-              : "not running"
+            isAdmin
+              ? "this month, all models"
+              : "your usage, last 30 days"
           }
         />
         <StatTile
-          label="spend"
-          value={!Number.isFinite(totalSpend) || totalSpend === 0 ? "$0" : `$${totalSpend.toFixed(2)}`}
-          tone="brass"
-          icon={<DollarSignIcon size={16} />}
-          spark={spendSpark}
-          hint={isAdmin ? "this month, all models" : "your usage"}
+          label="avg latency"
+          value={
+            perf ? (
+              `${Math.round(perf.avg_latency_ms / 100) / 10}s`
+            ) : (
+              "…"
+            )
+          }
+          delta={
+            perf
+              ? { value: Math.round(perf.p95_latency_ms / 100) / 10, suffix: "s p95" }
+              : undefined
+          }
+          tone="teal"
+          icon={<GaugeIcon size={16} />}
+          hint="model responses, 24h"
         />
+        <StatTile
+          label="model runs"
+          value={perf ? perf.total_runs.toLocaleString() : "…"}
+          delta={perf ? { value: -errRate, suffix: "% errors" } : undefined}
+          tone={errRate > 5 ? "rust" : "brass"}
+          icon={<LayersIcon size={16} />}
+          hint={`${perf?.total_tokens.toLocaleString() ?? "…"} tokens · 30d`}
+        />
+      </section>
+
+      {/* Charts row: message pulse + spend split */}
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2 border border-border bg-panel">
+          <PanelHeader
+            title="Message pulse · 24h"
+            icon={<ActivityIcon size={14} />}
+            action={
+              <button
+                type="button"
+                onClick={() => navigate("/analytics")}
+                className="mono-caps text-[10px] text-textMuted hover:text-brass"
+              >
+                analytics <ArrowRightIcon size={10} className="inline" />
+              </button>
+            }
+          />
+          <div className="p-4">
+            {msgs === null ? (
+              <Skeleton variant="row" />
+            ) : msgSeries.length === 0 ? (
+              <EmptyState
+                variant="conversation"
+                title="No messages in the last 24h"
+                description="Send a message in any panel or chat to see the pulse."
+                tone="neutral"
+              />
+            ) : (
+              <LineChart
+                data={msgSeries}
+                height={180}
+                tone="teal"
+                yAxis
+                xAxis
+              />
+            )}
+          </div>
+        </div>
+
+        <div className="border border-border bg-panel">
+          <PanelHeader
+            title="Spend by model"
+            icon={<DollarSignIcon size={14} />}
+            action={
+              isAdmin ? (
+                <button
+                  type="button"
+                  onClick={() => navigate("/analytics")}
+                  className="mono-caps text-[10px] text-textMuted hover:text-brass"
+                >
+                  analytics <ArrowRightIcon size={10} className="inline" />
+                </button>
+              ) : undefined
+            }
+          />
+          <div className="p-4">
+            {spend === null ? (
+              <Skeleton variant="row" />
+            ) : spend.length === 0 ? (
+              <EmptyState
+                variant="ledger"
+                title={isAdmin ? "No spend yet this month" : "Admin sees model spend"}
+                description={
+                  isAdmin
+                    ? "Model calls accrue here as the workspace uses them."
+                    : "Your own token usage is tracked under Analytics."
+                }
+                tone="brass"
+              />
+            ) : (
+              <BarChart
+                data={spend.slice(0, 6).map((m) => ({
+                  label: (m.model_name ?? "unattributed").split("/").pop() ?? "—",
+                  value: Number(m.spend) || 0,
+                  display: `$${Number(m.spend).toFixed(4)}`,
+                  secondary: `${m.tokens.toLocaleString()} tok`,
+                }))}
+                tone="brass"
+                height={180}
+                showValues
+              />
+            )}
+          </div>
+        </div>
       </section>
 
       {/* Quick actions */}
@@ -239,6 +388,12 @@ export function HomePage() {
             hint="Open chat with no model"
             onClick={() => navigate("/chat")}
           />
+          <QuickAction
+            icon={<GraphIcon size={16} />}
+            label="Swarm run"
+            hint="Multi-agent debate"
+            onClick={() => navigate("/swarm")}
+          />
           {isAdmin && (
             <QuickAction
               icon={<PanelsIcon size={16} />}
@@ -247,36 +402,36 @@ export function HomePage() {
               onClick={() => navigate("/panels")}
             />
           )}
-          {isAdmin && (
+          {isAdmin ? (
             <QuickAction
               icon={<ProvidersIcon size={16} />}
               label="Add provider"
               hint="OpenAI, Anthropic, NIM, custom"
               onClick={() => navigate("/providers")}
             />
-          )}
-          <QuickAction
-            icon={<UserIcon size={16} />}
-            label="Invite user"
-            hint={isAdmin ? "Settings → Users" : "Ask an admin"}
-            onClick={() => {
-              if (isAdmin) navigate("/settings");
-              else
+          ) : (
+            <QuickAction
+              icon={<UserIcon size={16} />}
+              label="Invite user"
+              hint="Ask an admin"
+              onClick={() =>
                 addToast({
                   id: "home-invite-toast",
                   title: "Ask an admin to invite",
-                  description: "Only admins can invite users to the workspace.",
+                  description:
+                    "Only admins can invite users to the workspace.",
                   tone: "info",
-                });
-            }}
-          />
+                })
+              }
+            />
+          )}
         </div>
       </section>
 
-      {/* Two-column: recent panels + recent activity */}
+      {/* Three-column live feed: panels · swarm runs · traffic split */}
       <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Recent panels — spans 2 columns on lg */}
-        <div className="lg:col-span-2 border border-border bg-panel">
+        {/* Recent panels */}
+        <div className="border border-border bg-panel">
           <PanelHeader
             title="Recent panels"
             icon={<PanelsIcon size={14} />}
@@ -306,7 +461,7 @@ export function HomePage() {
               />
             ) : (
               <ul className="divide-y divide-borderSoft">
-                {panels.slice(0, 5).map((p) => (
+                {panels.slice(0, 4).map((p) => (
                   <PanelRow key={p.id} panel={p} />
                 ))}
               </ul>
@@ -314,32 +469,97 @@ export function HomePage() {
           </div>
         </div>
 
-        {/* Recent activity */}
+        {/* Recent swarm runs */}
         <div className="border border-border bg-panel">
           <PanelHeader
-            title="Recent activity"
-            icon={<ActivityIcon size={14} />}
+            title="Swarm runs"
+            icon={<GraphIcon size={14} />}
+            action={
+              <button
+                type="button"
+                onClick={() => navigate("/swarm")}
+                className="mono-caps text-[10px] text-textMuted hover:text-brass"
+              >
+                open lab <ArrowRightIcon size={10} className="inline" />
+              </button>
+            }
           />
           <div className="p-1">
-            {activity === null ? (
+            {swarm === null ? (
               <div className="p-4 space-y-3">
-                {Array.from({ length: 6 }, (_, i) => (
-                  <SkeletonText key={i} lines={2} />
+                {Array.from({ length: 3 }, (_, i) => (
+                  <Skeleton key={i} variant="row" />
                 ))}
               </div>
-            ) : activity.length === 0 ? (
+            ) : swarm.length === 0 ? (
               <EmptyState
-                variant="ledger"
-                title="No activity yet"
-                description="Once anyone chats or uses a tool, the last 24 hours will show here."
-                tone="neutral"
+                variant="conversation"
+                title="No swarm runs yet"
+                description="Pick 2+ models in Agents Swarm and run a debate."
+                tone="teal"
               />
             ) : (
               <ul className="divide-y divide-borderSoft">
-                {activity.slice(0, 10).map((row) => (
-                  <ActivityRow key={row.id} row={row} />
+                {swarm.slice(0, 4).map((r) => (
+                  <SwarmRow key={r.id} run={r} />
                 ))}
               </ul>
+            )}
+          </div>
+        </div>
+
+        {/* Traffic split: chat vs panel */}
+        <div className="border border-border bg-panel">
+          <PanelHeader
+            title="Traffic split"
+            icon={<LayersIcon size={14} />}
+          />
+          <div className="p-4">
+            {!perf || perf.origins.length === 0 ? (
+              <div className="space-y-3">
+                <SkeletonText lines={4} />
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <BarChart
+                  data={perf.origins.map((o) => ({
+                    label: o.origin,
+                    value: o.runs,
+                    display: `${o.runs.toLocaleString()} runs`,
+                    secondary: `${o.tokens.toLocaleString()} tok`,
+                  }))}
+                  tone="teal"
+                  height={110}
+                  showValues
+                />
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <MiniStat
+                    label="tokens / turn"
+                    value={perf.tokens_per_turn.toFixed(0)}
+                  />
+                  <MiniStat
+                    label="total tokens"
+                    value={perf.total_tokens.toLocaleString()}
+                  />
+                  <MiniStat
+                    label="top model"
+                    value={
+                      perf.top_models[0]
+                        ? (perf.top_models[0].model.split("/").pop() ??
+                          perf.top_models[0].model)
+                        : "—"
+                    }
+                  />
+                  <MiniStat
+                    label="cache hit"
+                    value={
+                      perf.cache
+                        ? `${Math.round((perf.cache.hit_rate ?? 0) * 100)}%`
+                        : "—"
+                    }
+                  />
+                </div>
+              </div>
             )}
           </div>
         </div>
@@ -409,13 +629,12 @@ function QuickAction({
 }
 
 function PanelRow({ panel }: { panel: PanelSummary }) {
+  const navigate = useNavigate();
   return (
     <li>
       <button
         type="button"
-        onClick={() => {
-          window.location.href = `/panels?panel=${panel.id}`;
-        }}
+        onClick={() => navigate(`/panels?panel=${panel.id}`)}
         className="w-full px-4 py-2.5 flex items-center gap-3 hover:bg-panelAlt transition-colors text-left"
       >
         <Avatar name={panel.name} size={28} />
@@ -440,32 +659,54 @@ function PanelRow({ panel }: { panel: PanelSummary }) {
   );
 }
 
-function ActivityRow({ row }: { row: AuditRow }) {
+function SwarmRow({ run }: { run: SwarmRunRow }) {
+  const navigate = useNavigate();
+  const modelCount = Array.isArray(run.models) ? run.models.length : 0;
+  const tone =
+    run.status === "completed"
+      ? "text-teal"
+      : run.status === "error"
+        ? "text-rust"
+        : "text-brass";
   return (
-    <li className="px-4 py-2 flex items-start gap-3">
-      <Avatar name={row.user_name} size={20} />
-      <div className="flex-1 min-w-0">
-        <div className="text-[12px] text-text truncate">
-          <span className="font-medium">{row.user_name}</span>{" "}
-          <span className="text-textMuted">{humanise(row.action)}</span>
+    <li>
+      <button
+        type="button"
+        onClick={() => navigate("/swarm")}
+        className="w-full px-4 py-2.5 flex items-center gap-3 hover:bg-panelAlt transition-colors text-left"
+      >
+        <span className={`shrink-0 ${tone}`}>
+          <GraphIcon size={16} />
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="text-[13px] text-text truncate">{run.question}</div>
+          <div className="mono-caps text-[10px] text-textMuted tracking-wider">
+            {modelCount} models · {run.rounds_completed}{" "}
+            {run.rounds_completed === 1 ? "round" : "rounds"} ·{" "}
+            {shortTime(run.created_at)}
+          </div>
         </div>
-        <div className="mono-caps text-[10px] text-textFaint tracking-wider flex items-center gap-1">
-          <ClockIcon size={9} />
-          <span>{shortTime(row.ts)}</span>
-          {row.tokens !== null && row.tokens > 0 && (
-            <>
-              <span className="mx-1">·</span>
-              <span>{row.tokens} tok</span>
-            </>
-          )}
-        </div>
-      </div>
+        <span
+          className={`mono-caps text-[10px] tracking-wider shrink-0 ${tone}`}
+        >
+          {run.status}
+        </span>
+      </button>
     </li>
   );
 }
 
-function humanise(action: string): string {
-  return action.replace(/_/g, " ");
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="font-mono text-[13px] text-text tabular-nums truncate">
+        {value}
+      </div>
+      <div className="mono-caps text-[10px] text-textMuted tracking-wider">
+        {label}
+      </div>
+    </div>
+  );
 }
 
 function shortTime(ts: string): string {
@@ -485,7 +726,7 @@ function shortTime(ts: string): string {
 // ─────────────────────────────────────────────────────────────────────
 // PublicLandingPage — shown when the visitor isn't logged in. Hero +
 // feature grid + testimonials + CTA. The CTA reads /api/setup/status
-// to decide between /setup (first boot) and /login (configured).
+// to decide between /setup (first boot) or /login.
 // ─────────────────────────────────────────────────────────────────────
 
 interface LandingFeature {

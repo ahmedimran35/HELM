@@ -31,12 +31,15 @@
 
 import { spawn } from "bun";
 import { config } from "../config.ts";
-import { safeFetch, SafeFetchError } from "./safe-fetch.ts";
+import { safeFetch, SafeFetchError, assertSafeOutboundUrl } from "./safe-fetch.ts";
 
 export interface LightpandaResult {
   url: string;
   markdown: string;
   title: string;
+  /** Short descriptive text from the search engine (the text under the
+   *  result title). Empty when the engine doesn't provide one. */
+  snippet: string;
   duration_ms: number;
   /** When fetched via a configured HTTP daemon, the daemon's
       response may include extra fields. Reserved for future use. */
@@ -59,6 +62,17 @@ function stripLeadingChrome(md: string): string {
     return md.slice(idx);
   }
   return md;
+}
+
+/** Strip Wikipedia's language-selector block (the "[ ] 60 languages"
+ *  link list that appears right after the H1). This is navigation
+ *  chrome, not content — it fills snippets and answers with dozens of
+ *  language links. */
+function stripLanguageSelector(md: string): string {
+  return md
+    .replace(/\[\s*\]\s*\d+\s+languages[\s\S]*?(?=\n\n|\n#|$)/m, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 // ----------------------------------------------------------------- fetch
@@ -108,6 +122,7 @@ export async function lightpandaFetchViaCli(
     url,
     markdown: stdout,
     title: extractTitleFromMd(stdout),
+    snippet: "",
     duration_ms,
     source: "cli",
   };
@@ -149,6 +164,7 @@ export async function lightpandaFetchViaHttp(
     url,
     markdown: body.markdown ?? "",
     title: body.title ?? extractTitleFromMd(body.markdown ?? ""),
+    snippet: "",
     duration_ms,
     source: "http",
   };
@@ -159,6 +175,14 @@ export async function lightpandaFetch(
   url: string,
   opts: { timeoutMs?: number } = {},
 ): Promise<LightpandaResult> {
+  // Co-located SSRF guard. The *target* URL is user-controlled (chat
+  // `?url=`, web-search direct URL, pasted links) and is fetched by the
+  // lightpanda binary / daemon, so it MUST be validated here — not left
+  // to each caller to remember. Reject private/loopback/metadata IPs,
+  // non-default ports, embedded credentials, and numeric-IP encodings.
+  // Internal search-engine URLs (Brave/DDG/Startpage/Wikipedia) are all
+  // public hosts, so `allowLocal:false` does not break them.
+  await assertSafeOutboundUrl(url, { allowLocal: false });
   if (config.webSearch.lightpandaUrl) {
     return lightpandaFetchViaHttp(config.webSearch.lightpandaUrl, url, opts);
   }
@@ -203,13 +227,25 @@ const SEARCH_ENGINES: SearchEngineDef[] = [
 ];
 
 /** Trim a title — strip HTML, collapse whitespace, drop trailing "...". */
-function stripTags(s: string): string {
+function decodeEntities(s: string): string {
+  const named: Record<string, string> = {
+    amp: "&", lt: "<", gt: ">", quot: '"', apos: "'",
+    nbsp: " ", copy: "©", reg: "®", hellip: "…", mdash: "—", ndash: "–",
+    laquo: "«", raquo: "»", lsquo: "‘", rsquo: "’", ldquo: "“", rdquo: "”",
+  };
   return s
-    .replace(/<[^>]+>/g, "")
-    .replace(/&[a-z]+;/gi, " ")
-    .replace(/&#[0-9]+;/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+    .replace(/&([a-z][a-z0-9]*);/gi, (m, name) => named[name.toLowerCase()] ?? m)
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)));
+}
+
+function stripTags(s: string): string {
+  return decodeEntities(
+    s
+      .replace(/<[^>]+>/g, "")
+      .replace(/\s+/g, " ")
+      .trim(),
+  );
 }
 
 /** Unwrap search-engine redirect wrappers so the caller gets the real URL. */
@@ -273,6 +309,7 @@ function addResult(
   title: string,
   rawUrl: string,
   maxResults: number,
+  snippet = "",
 ): void {
   if (found.size >= maxResults) return;
   const cleanTitle = stripTags(title);
@@ -286,6 +323,7 @@ function addResult(
     url,
     title: cleanTitle,
     markdown: "",
+    snippet: stripTags(snippet).slice(0, 400),
     duration_ms: 0,
     source: "cli",
   });
@@ -373,6 +411,9 @@ export async function lightpandaSearchWithTopPage(
 }> {
   // 1. Wikipedia REST fast-path (free, no key, perfect for "who is X" queries).
   //    Plain `fetch`, no lightpanda needed — works in every environment.
+  let wikiResult: LightpandaResult | null = null;
+  let wikiAnswer: string | null = null;
+  let wikiTopMarkdown = "";
   try {
     const wp = await wikipediaFastPath(query);
     if (wp) {
@@ -383,7 +424,7 @@ export async function lightpandaSearchWithTopPage(
       let rendered = "";
       try {
         const fetched = await lightpandaFetch(wp.url, { timeoutMs: 20000 });
-        rendered = stripLeadingChrome(fetched.markdown).slice(0, 12000);
+        rendered = stripLanguageSelector(stripLeadingChrome(fetched.markdown)).slice(0, 12000);
       } catch {
         // lightpanda unavailable or timed out — try plain fetch + HTML parse
         try {
@@ -392,30 +433,28 @@ export async function lightpandaSearchWithTopPage(
           rendered = wp.extract;
         }
       }
-      return {
-        results: [
-          {
-            url: wp.url,
-            title: wp.title,
-            markdown: "",
-            duration_ms: 0,
-            source: "wikipedia",
-          },
-        ],
-        topMarkdown: rendered,
-        answerBox: wp.extract,
+      wikiResult = {
+        url: wp.url,
+        title: wp.title,
+        markdown: "",
+        snippet: wp.extract.slice(0, 400),
+        duration_ms: 0,
+        source: "wikipedia",
       };
+      wikiAnswer = wp.extract;
+      wikiTopMarkdown = rendered;
     }
   } catch {
     // Fall through to search-engine scraping.
   }
 
-  // 2. Search-engine scraping.
+  // 2. Search-engine scraping — always run, even when Wikipedia matched,
+  //    so the user gets multiple results (Wikipedia + search hits).
   //    For each engine we try: plain `fetch` (no lightpanda needed),
-  //    then lightpanda-rendered markdown as a fallback. Plain fetch
-  //    alone works for DDG/Brave/Startpage because they all return
-  //    server-rendered HTML with `<a href="...">title</a>` result rows.
-  let answerBox: string | null = null;
+  //    then lightpanda-rendered markdown as a fallback.
+  let engineResults: LightpandaResult[] = [];
+  let engineAnswerBox: string | null = null;
+  let engineTopMarkdown = "";
   for (const engine of SEARCH_ENGINES) {
     const url = engine.url(query);
 
@@ -426,20 +465,16 @@ export async function lightpandaSearchWithTopPage(
         const results = parseHTMLResults(html, maxResults);
         if (results.length > 0) {
           if (engine.name === "brave") {
-            answerBox = extractBraveAnswerBoxFromHTML(html);
+            engineAnswerBox = extractBraveAnswerBoxFromHTML(html);
           }
           // Fetch the top page's text via plain fetch (cheap).
-          let topMarkdown = "";
           if (results[0]) {
             try {
-              topMarkdown = await fetchAndParsePageText(results[0].url);
+              engineTopMarkdown = await fetchAndParsePageText(results[0].url);
             } catch { /* ignore */ }
           }
-          return {
-            results,
-            topMarkdown,
-            answerBox: answerBox || topMarkdown || null,
-          };
+          engineResults = results;
+          break;
         }
       }
     } catch {
@@ -454,19 +489,45 @@ export async function lightpandaSearchWithTopPage(
       const results = parseSearchResults(r.markdown, maxResults);
       if (results.length === 0) continue;
       if (engine.name === "brave") {
-        answerBox = extractBraveAnswerBox(r.markdown);
+        engineAnswerBox = extractBraveAnswerBox(r.markdown);
       }
-      let topMarkdown = "";
       try {
         const top = await lightpandaFetch(results[0]!.url, { timeoutMs: 20000 });
-        topMarkdown = stripLeadingChrome(top.markdown).slice(0, 12000);
+        engineTopMarkdown = stripLanguageSelector(stripLeadingChrome(top.markdown)).slice(0, 12000);
       } catch { /* keep what we have */ }
-      return { results, topMarkdown, answerBox: answerBox || topMarkdown || null };
+      engineResults = results;
+      break;
     } catch {
       continue;
     }
   }
-  return { results: [], topMarkdown: "", answerBox: null };
+
+  // 3. Combine Wikipedia + search engine results.
+  const allResults = wikiResult ? [wikiResult, ...engineResults] : engineResults;
+
+  // If the top result is a Wikipedia article but the fast-path didn't
+  // match (e.g. "who is the pm of Bangladesh"), fetch its clean REST
+  // summary so the answer is real prose, not the raw page's nav chrome.
+  let answerBox = wikiAnswer || engineAnswerBox || null;
+  if (!answerBox) {
+    const top = allResults[0];
+    const m = top?.url.match(/wikipedia\.org\/wiki\/([^#?]+)/i);
+    if (m) {
+      try {
+        const title = decodeURIComponent(m[1]!.replace(/_/g, " "));
+        const wp = await wikipediaExtractByTitle(title);
+        if (wp) answerBox = wp.extract;
+      } catch {
+        /* ignore — fall back to page markdown */
+      }
+    }
+  }
+
+  return {
+    results: allResults,
+    topMarkdown: wikiTopMarkdown || engineTopMarkdown,
+    answerBox: answerBox || (wikiTopMarkdown || engineTopMarkdown) || null,
+  };
 }
 
 // ----------------------------------------------------------------- HTML
@@ -513,6 +574,22 @@ function parseHTMLResults(html: string, maxResults: number): LightpandaResult[] 
   for (const m of html.matchAll(classRe)) {
     addResult(found, m[2] ?? "", m[1] ?? "", maxResults);
     if (found.size >= maxResults) break;
+  }
+
+  // 1b. DDG snippets: <a class="result__snippet">…</a> — DDG emits one
+  //     snippet per result in document order, so match by index. Without
+  //     this, every non-Wikipedia result renders with an empty snippet
+  //     and there is no fallback answer text for queries with no answer box.
+  if (found.size > 0) {
+    const snippetRe = /<a\b[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
+    const results = Array.from(found.values());
+    let i = 0;
+    for (const m of html.matchAll(snippetRe)) {
+      if (i >= results.length) break;
+      const r = results[i];
+      if (r && !r.snippet) r.snippet = stripTags(m[1] ?? "").slice(0, 400);
+      i++;
+    }
   }
 
   // 2. Brave/Bing/Startpage: any <a href="https://..."> with non-trivial text
@@ -594,6 +671,14 @@ async function wikipediaFastPath(
   const titles = data[1];
   if (!titles || titles.length === 0) return null;
   const title = titles[0]!;
+  return wikipediaExtractByTitle(title);
+}
+
+/** Fetch the clean REST summary for a Wikipedia article title. Returns
+ *  the extract (plain text, no nav chrome) or null on failure. */
+async function wikipediaExtractByTitle(
+  title: string,
+): Promise<{ title: string; url: string; extract: string } | null> {
   const articleUrl = `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, "_"))}`;
   const sumUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title.replace(/ /g, "_"))}`;
   const sumR = await safeFetch(sumUrl, { signal: AbortSignal.timeout(10_000) });

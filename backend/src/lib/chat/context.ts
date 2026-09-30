@@ -89,7 +89,10 @@ export async function shouldRunWebSearch(
   forceWebSearch: boolean | undefined,
 ): Promise<boolean> {
   if (forceWebSearch === true) return true;
-  if (forceWebSearch === false) return isAdmin;
+  // The UI toggle is an explicit user instruction. Admin posture must not
+  // override an explicit "off" choice, otherwise an admin can never turn
+  // live search off and cached/search-only replies leak into no-search turns.
+  if (forceWebSearch === false) return false;
   if (isAdmin) return true;
   const postureRows = await sql<{ posture: string }[]>`
     SELECT posture FROM tool_posture

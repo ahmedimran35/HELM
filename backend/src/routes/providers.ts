@@ -194,25 +194,54 @@ router.post("/:id/test", requireAdmin, async (c) => {
     return safeError(c, err, { status: 400, code: "providers_invalid" });
   }
   const start = Date.now();
+  let upstream;
   try {
-    const upstream = await adapter.fetchModels();
-    const latency_ms = Date.now() - start;
-    return c.json({
-      ok: true,
-      latency_ms,
-      upstream_status: "reachable",
-      models_seen: upstream.length,
-      sample: upstream.slice(0, 3).map((m) => m.externalId),
-    });
+    upstream = await adapter.fetchModels();
   } catch (err) {
-    const latency_ms = Date.now() - start;
     return c.json({
       ok: false,
-      latency_ms,
+      latency_ms: Date.now() - start,
       upstream_status: "unreachable",
       error: (err as Error).message,
     });
   }
+  // Generation probe: a tiny completion against the first listed model.
+  // Listing reachability is NOT proof the account can actually run the
+  // model — NVIDIA in particular lists a full catalog but returns 404 (or
+  // an empty stream) for models the account hasn't enabled. Surface that
+  // here so "TEST OK" stops implying chat will work.
+  const probeModel = upstream[0]?.externalId;
+  let generation: { ok: boolean; model?: string; error?: string } = { ok: false };
+  if (probeModel) {
+    try {
+      let produced = "";
+      for await (const chunk of adapter.chat({
+        model: probeModel,
+        messages: [{ role: "user", content: "ping" }],
+        maxTokens: 8,
+      })) {
+        if (chunk.delta) produced += chunk.delta;
+        if (chunk.done) break;
+      }
+      const trimmed = produced.trim();
+      // The openai-compatible adapter surfaces HTTP failures as a
+      // "[provider NNN] ..." delta rather than throwing.
+      const failed = trimmed.length === 0 || trimmed.startsWith("[provider");
+      generation = failed
+        ? { ok: false, model: probeModel, error: trimmed || "empty stream" }
+        : { ok: true, model: probeModel };
+    } catch (err) {
+      generation = { ok: false, model: probeModel, error: (err as Error).message };
+    }
+  }
+  return c.json({
+    ok: true,
+    latency_ms: Date.now() - start,
+    upstream_status: "reachable",
+    models_seen: upstream.length,
+    sample: upstream.slice(0, 3).map((m) => m.externalId),
+    generation,
+  });
 });
 
 /** Re-encrypt the API key with the current SESSION_SECRET / v2 AAD.

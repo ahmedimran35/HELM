@@ -85,8 +85,8 @@ export function SkillsPage() {
     );
   }
   return (
-    <div className="p-6 max-w-[1080px]">
-      <h2 className="font-display text-[20px] font-semibold text-text tracking-wide">
+    <div className="content-page">
+      <h2 className="page-title">
         Skills & Packs
       </h2>
       <div className="text-textMuted text-[13px] mb-4">
@@ -405,7 +405,7 @@ function NewSkillForm({
             <select
               value={kind}
               onChange={(e) => setKind(e.target.value as SkillKind)}
-              className="w-full h-9 bg-panelAlt border border-border text-text px-3 rounded-none font-mono text-[13px] focus:border-brass"
+              className="w-full h-9 bg-panelAlt border border-border text-text px-3 rounded-md font-mono text-[13px] focus:border-brass focus:outline-none focus:shadow-[0_0_0_3px_rgb(var(--brass-rgb)/0.16)]"
             >
               <option value="prompt">prompt</option>
               <option value="tool">tool</option>
@@ -419,7 +419,7 @@ function NewSkillForm({
             <select
               value={scope}
               onChange={(e) => setScope(e.target.value as SkillScope)}
-              className="w-full h-9 bg-panelAlt border border-border text-text px-3 rounded-none font-mono text-[13px] focus:border-brass"
+              className="w-full h-9 bg-panelAlt border border-border text-text px-3 rounded-md font-mono text-[13px] focus:border-brass focus:outline-none focus:shadow-[0_0_0_3px_rgb(var(--brass-rgb)/0.16)]"
             >
               <option value="org">org</option>
               <option value="panel">panel</option>
@@ -540,7 +540,7 @@ function EditSkillForm({
             <select
               value={kind}
               onChange={(e) => setKind(e.target.value as SkillKind)}
-              className="w-full h-9 bg-panelAlt border border-border text-text px-3 rounded-none font-mono text-[13px] focus:border-brass"
+              className="w-full h-9 bg-panelAlt border border-border text-text px-3 rounded-md font-mono text-[13px] focus:border-brass focus:outline-none focus:shadow-[0_0_0_3px_rgb(var(--brass-rgb)/0.16)]"
             >
               <option value="prompt">prompt</option>
               <option value="tool">tool</option>
@@ -554,7 +554,7 @@ function EditSkillForm({
             <select
               value={scope}
               onChange={(e) => setScope(e.target.value as SkillScope)}
-              className="w-full h-9 bg-panelAlt border border-border text-text px-3 rounded-none font-mono text-[13px] focus:border-brass"
+              className="w-full h-9 bg-panelAlt border border-border text-text px-3 rounded-md font-mono text-[13px] focus:border-brass focus:outline-none focus:shadow-[0_0_0_3px_rgb(var(--brass-rgb)/0.16)]"
             >
               <option value="org">org</option>
               <option value="panel">panel</option>
@@ -796,7 +796,7 @@ function NewPackForm({
           <select
             value={source}
             onChange={(e) => setSource(e.target.value as PackSource)}
-            className="w-full h-9 bg-panelAlt border border-border text-text px-3 rounded-none font-mono text-[13px] focus:border-brass"
+            className="w-full h-9 bg-panelAlt border border-border text-text px-3 rounded-md font-mono text-[13px] focus:border-brass focus:outline-none focus:shadow-[0_0_0_3px_rgb(var(--brass-rgb)/0.16)]"
           >
             <option value="git:url">git:url</option>
             <option value="local:path">local:path</option>

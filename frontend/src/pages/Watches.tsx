@@ -141,9 +141,9 @@ export function WatchesPage() {
   const loading = watches === null || triggers === null;
 
   return (
-    <div className="p-6 max-w-[960px]">
+    <div className="content-page-sm">
       <div className="flex items-baseline gap-3 mb-1">
-        <h2 className="font-display text-[20px] font-semibold text-text tracking-wide">
+        <h2 className="page-title">
           Watches & Triggers
         </h2>
         {watches && watches.length > 0 && (

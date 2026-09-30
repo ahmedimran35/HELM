@@ -70,6 +70,37 @@ type InboundMessage =
   | { type: "helm:app-data"; id: string; op: "get" | "set" | "del" | "list"; key?: string; value?: unknown }
   | { type: string; [k: string]: unknown };
 
+// SECURITY: the helm:api bridge runs with the HOST user's session cookie
+// (credentials: "include"), so it is a privilege boundary. A bundle is
+// untrusted code — it must NOT be able to reach admin/user-mutating
+// endpoints (POST /api/users, DELETE /api/providers/:id, …) or read
+// another user's data. We therefore enforce a strict DENY-BY-DEFAULT
+// allowlist: only read-only, self-scoped endpoints are reachable, and
+// only via GET (POST/PUT/PATCH/DELETE are rejected outright). Anything
+// not matched here is refused before a request is ever issued.
+//
+// The allowlist is deliberately narrow. If a future app legitimately
+// needs a mutating call, that scope must be granted explicitly on the
+// install (granted_scopes) and wired through here — never by widening
+// this list. Module-scoped so it is a stable reference (no re-render
+// churn, no useCallback dependency).
+const APP_API_ALLOWLIST: Array<{ method: "GET"; test: (path: string) => boolean }> = [
+  // Per-install data is handled by handleAppDataRequest, not callAPI,
+  // but allow the raw GET form for parity.
+  { method: "GET", test: (p) => /^\/api\/app-data\/[0-9a-f-]{36}\/[^/]+$/.test(p) },
+  // Panels the user belongs to (read-only listing + messages).
+  { method: "GET", test: (p) => /^\/api\/panels$/.test(p) },
+  { method: "GET", test: (p) => /^\/api\/panels\/[0-9a-f-]{36}$/.test(p) },
+  { method: "GET", test: (p) => /^\/api\/panels\/[0-9a-f-]{36}\/messages$/.test(p) },
+  // Self identity + usable models (read-only, self-scoped).
+  { method: "GET", test: (p) => /^\/api\/me$/.test(p) },
+  { method: "GET", test: (p) => /^\/api\/models$/.test(p) },
+  { method: "GET", test: (p) => /^\/api\/users\/me$/.test(p) },
+  // App catalog (read-only).
+  { method: "GET", test: (p) => /^\/api\/apps$/.test(p) },
+  { method: "GET", test: (p) => /^\/api\/apps\/[a-z0-9][a-z0-9-]{0,62}$/.test(p) },
+];
+
 export function AppFrame({ slug, install, appName, bundleUrl, onClose }: AppFrameProps) {
   const { addToast } = useToast();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -102,27 +133,36 @@ export function AppFrame({ slug, install, appName, bundleUrl, onClose }: AppFram
     return msg.type === "helm:app-data";
   }
   // Proxy an authenticated /api/* request from the sandboxed app.
+  // (Allowlist lives at module scope — see APP_API_ALLOWLIST above.)
   const handleApiRequest = useCallback(
     async (msg: Extract<InboundMessage, { type: "helm:api" }>) => {
-      const { id, method, path, body } = msg;
-      // Validate: only /api/* paths, standard methods.
+      const { id, method, path } = msg;
+      // Normalise the path (strip query string) so the allowlist matches
+      // the route, not the query.
+      let pathname = "";
+      try {
+        pathname = new URL(path, window.location.origin).pathname;
+      } catch {
+        pathname = "";
+      }
       if (
         typeof path !== "string" ||
-        !path.startsWith("/api/") ||
-        !["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"].includes(method)
+        !pathname.startsWith("/api/") ||
+        method !== "GET" ||
+        !APP_API_ALLOWLIST.some((rule) => rule.method === method && rule.test(pathname))
       ) {
-        postResponse(id, 400, { error: "invalid_api_path_or_method" });
+        postResponse(id, 403, { error: "forbidden_api_path_or_method" });
         return;
       }
       try {
-        const res = await fetch(path, {
+        // Fetch the validated pathname only — never the raw app-supplied
+        // string, which could carry a query or fragment we did not vet.
+        const res = await fetch(pathname, {
           method,
           credentials: "include",
           headers: {
             Accept: "application/json",
-            ...(body ? { "Content-Type": "application/json" } : {}),
           },
-          body: body ? JSON.stringify(body) : undefined,
         });
         const text = await res.text();
         let parsed: unknown = null;

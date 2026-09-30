@@ -10,6 +10,7 @@
 // `onPan({ x, y })`. Node moves in the mini-map flow through `onMoveNode`.
 
 import { useMemo, useRef, useState } from "react";
+import { useSvgTheme } from "./svg-theme";
 import { MINIMAP_H, MINIMAP_PADDING, MINIMAP_W } from "./constants";
 import { graphBounds, nodeBounds } from "./helpers";
 import type { WorkflowEdge, WorkflowNode } from "./types";
@@ -26,6 +27,7 @@ interface Props {
 const PAD = 8; // Pixels of empty space inside the mini-map around the world bounds.
 
 export function MiniMap({ nodes, edges, view, dims, onPan, onMoveNode }: Props) {
+  const t = useSvgTheme();
   const ref = useRef<SVGSVGElement | null>(null);
   const [draggingVp, setDraggingVp] = useState<{ startX: number; startY: number; origView: { x: number; y: number } } | null>(null);
   const [draggingNode, setDraggingNode] = useState<{ id: string; offX: number; offY: number } | null>(null);
@@ -150,11 +152,12 @@ export function MiniMap({ nodes, edges, view, dims, onPan, onMoveNode }: Props) 
         onMouseMove={onMove}
         onMouseUp={onUp}
         onMouseLeave={onUp}
-        className="block bg-[#0B0E12] border border-brass/60 shadow-2xl cursor-crosshair select-none"
+        className="block border border-brass/60 shadow-2xl cursor-crosshair select-none"
+        style={{ backgroundColor: t.minimapBg }}
       >
         {/* Crosshair at the world center, faint */}
-        <line x1={MINIMAP_W / 2} y1={0} x2={MINIMAP_W / 2} y2={MINIMAP_H} stroke="#1D2229" strokeWidth={0.5} />
-        <line x1={0} y1={MINIMAP_H / 2} x2={MINIMAP_W} y2={MINIMAP_H / 2} stroke="#1D2229" strokeWidth={0.5} />
+        <line x1={MINIMAP_W / 2} y1={0} x2={MINIMAP_W / 2} y2={MINIMAP_H} stroke={t.borderSoft} strokeWidth={0.5} />
+        <line x1={0} y1={MINIMAP_H / 2} x2={MINIMAP_W} y2={MINIMAP_H / 2} stroke={t.borderSoft} strokeWidth={0.5} />
 
         {/* Edges */}
         {edges.map((e) => {
@@ -172,7 +175,7 @@ export function MiniMap({ nodes, edges, view, dims, onPan, onMoveNode }: Props) 
               y1={sy}
               x2={dx}
               y2={dy}
-              stroke={e.condition ? "#b58a23" : "#4c9c90"}
+              stroke={e.condition ? t.brassSoft : t.tealDark}
               strokeWidth={1}
               opacity={0.5}
               strokeDasharray={e.condition ? "2 2" : undefined}
@@ -190,9 +193,9 @@ export function MiniMap({ nodes, edges, view, dims, onPan, onMoveNode }: Props) 
               y={n.y * scale + offsetY}
               width={Math.max(3, b.w * scale)}
               height={Math.max(2, b.h * scale)}
-              fill={n.kind === "trigger" ? "#C9A227" : "#4c9c90"}
+              fill={n.kind === "trigger" ? t.brass : t.tealDark}
               opacity={0.85}
-              stroke="#0B0E12"
+              stroke={t.border}
               strokeWidth={0.5}
               className="cursor-grab"
               onMouseDown={(e) => onMiniNodePointerDown(e, n)}
@@ -206,8 +209,8 @@ export function MiniMap({ nodes, edges, view, dims, onPan, onMoveNode }: Props) 
           y={vpY}
           width={Math.max(8, vpW)}
           height={Math.max(6, vpH)}
-          fill="rgba(201,162,39,0.10)"
-          stroke="#C9A227"
+          fill={t.brass} opacity={0.10}
+          stroke={t.brass}
           strokeWidth={1}
           className="cursor-grab"
           onMouseDown={onViewportPointerDown}
@@ -218,7 +221,7 @@ export function MiniMap({ nodes, edges, view, dims, onPan, onMoveNode }: Props) 
           y1={vpY + vpH / 2}
           x2={vpX + vpW / 2 + 4}
           y2={vpY + vpH / 2}
-          stroke="#C9A227"
+          stroke={t.brass}
           strokeWidth={1}
           pointerEvents="none"
         />
@@ -227,13 +230,13 @@ export function MiniMap({ nodes, edges, view, dims, onPan, onMoveNode }: Props) 
           y1={vpY + vpH / 2 - 4}
           x2={vpX + vpW / 2}
           y2={vpY + vpH / 2 + 4}
-          stroke="#C9A227"
+          stroke={t.brass}
           strokeWidth={1}
           pointerEvents="none"
         />
 
         {/* Header label */}
-        <text x={6} y={10} fontSize={8} fill="#8A7220" pointerEvents="none" letterSpacing="0.04em">
+        <text x={6} y={10} fontSize={8} fill={t.brassDark} pointerEvents="none" letterSpacing="0.04em">
           MAP · {Math.round(view.scale * 100)}%
         </text>
       </svg>

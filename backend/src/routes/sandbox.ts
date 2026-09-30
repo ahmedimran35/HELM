@@ -410,6 +410,18 @@ router.post(
   await ensureDir(sessionTmp);
 
   const startedAt = Date.now();
+  // Resource limits. Bun.spawn exposes no portable rlimit knob, so we
+  // enforce them via `ulimit` (a bash builtin, available on both macOS
+  // and Linux) prepended to the user command. `-v` caps virtual memory
+  // (KB), `-t` caps CPU time (seconds). A command that exceeds either is
+  // killed by the kernel with SIGKILL/SIGXCPU rather than being allowed
+  // to OOM the API process. These are real limits now, not the hint
+  // `HELM_SANDBOX_MEM_BUDGET_MB` used to be.
+  const MEM_BUDGET_MB = Number(process.env.HELM_SANDBOX_MEM_BUDGET_MB ?? 256);
+  const memBudgetKb = Math.max(32 * 1024, Math.min(MEM_BUDGET_MB * 1024, 1024 * 1024));
+  const cpuBudgetSecs = Math.ceil((timeoutMs / 1000) * 2); // 2x the wall clock, headroom for IO
+  const limitPrefix =
+    `ulimit -v ${memBudgetKb} -t ${cpuBudgetSecs} 2>/dev/null; `;
   // Pick the spawn command based on the SANDBOX_USE_UNSHARE flag.
   // Default: `bash -c <cmd>` (basic isolation).
   // With flag: `unshare --user --map-root-user --net --mount-proc --pid
@@ -427,7 +439,7 @@ router.post(
         "--fork",
         "bash",
         "-c",
-        body.cmd,
+        limitPrefix + body.cmd,
       ]
     : [
         // -c (not -lc): skips login profile scripts like /etc/profile and
@@ -437,7 +449,7 @@ router.post(
         // right default for a sandboxed shell.
         "bash",
         "-c",
-        body.cmd,
+        limitPrefix + body.cmd,
       ];
   const proc = Bun.spawn({
     cmd: execCmd,
@@ -448,8 +460,10 @@ router.post(
       PATH: process.env.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin",
       HOME: cwd,
       TMPDIR: sessionTmp,
-      // Hint the cap. Not enforced — see file header.
-      HELM_SANDBOX_MEM_BUDGET_MB: "256",
+      // Informational only — the real limit is enforced via `ulimit -v`
+      // in the command prefix above. Kept so the response/audit can
+      // report the configured budget.
+      HELM_SANDBOX_MEM_BUDGET_MB: String(MEM_BUDGET_MB),
     },
     stdin: body.stdin ? "pipe" : "ignore",
     stdout: "pipe",

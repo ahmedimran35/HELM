@@ -161,9 +161,12 @@ function flushPanel(panelId: string) {
   const set = sockets.get(panelId);
   if (!set) return;
   // For multi-message flushes, wrap with a single outer envelope so
-  // the client sees one frame. The wrapper is a JSON array which
-  // the existing single-frame-fast-path doesn't care about.
-  const frame = queue.length === 1 ? queue[0]! : JSON.stringify(queue);
+  // the client sees one frame. The queue holds ALREADY-stringified
+  // frames (each pushed via JSON.stringify in broadcast()), so we join
+  // them with commas and wrap in brackets to produce a JSON array of
+  // OBJECTS — NOT JSON.stringify(queue), which would produce an array
+  // of STRINGS (double-encoding) that the client can't dispatch.
+  const frame = queue.length === 1 ? queue[0]! : `[${queue.join(",")}]`;
   for (const peer of set) {
     try {
       peer._raw?.send(frame);
@@ -256,7 +259,7 @@ async function authFromRequest(req: Request): Promise<PanelSocketData | null> {
   // same as an expired/invalid session.
   const sessionId = parseSessionCookie(req.headers.get("cookie") ?? "");
   if (!sessionId) return null;
-  const { findSession, loadUserForSession } = await import("./auth/session.ts");
+  const { findSession, loadUserForSession, revokeSession } = await import("./auth/session.ts");
   const session = await findSession(sessionId);
   if (!session) return null;
   const user = await loadUserForSession(sessionId);
@@ -317,6 +320,15 @@ async function authFromRequest(req: Request): Promise<PanelSocketData | null> {
           },
           ts: Date.now(),
         });
+        // When the operator has enabled IP-bind hijack protection
+        // (HELM_SESSION_IP_BIND=1, the same flag the HTTP middleware
+        // honours), treat a WS upgrade from a different IP as cookie
+        // theft: revoke the session and reject the upgrade. Without the
+        // flag we only log (mobile NAT would otherwise brick users).
+        if (process.env.HELM_SESSION_IP_BIND === "1") {
+          await revokeSession(sessionId);
+          return null;
+        }
       }
     }
   } catch (err) {
@@ -783,6 +795,12 @@ export const panelWS = {
     `;
     history.reverse();
 
+    // Perf-telemetry inputs for this panel turn: rough prompt size
+    // (chars → ~tokens at 4 chars/token) and the stream start time.
+    const promptChars =
+      content.length + history.reduce((n, h) => n + h.content.length, 0);
+    const streamStart = Date.now();
+
     try {
       let assembled = "";
       let completionTokens = 0;
@@ -830,6 +848,13 @@ export const panelWS = {
         VALUES (${data.panelId}::uuid, ${model.id}::uuid, 'assistant', ${assembled}, ${completionTokens})
         RETURNING id
       `;
+      // Record the run so the perf dashboard attributes usage (tokens,
+      // latency, errors) to this panel instead of dropping panel turns.
+      await sql`
+        INSERT INTO harness_runs (user_id, panel_id, harness, model, prompt_tokens, completion_tokens, latency_ms, status)
+        VALUES (${data.userId}::uuid, ${data.panelId}::uuid, 'openai', ${model.external_id},
+                ${Math.ceil(promptChars / 4)}, ${completionTokens}, ${Date.now() - streamStart}, 'ok')
+      `.catch((err) => rawConsole.warn("[ws] harness_runs insert failed:", (err as Error).message));
       broadcast(data.panelId, {
         type: "message",
         id: aRows[0]!.id,
@@ -868,6 +893,13 @@ export const panelWS = {
       });
     } catch (err) {
       const message = (err as Error).message || "model request failed";
+      // Record the failed run so the perf dashboard's error count and
+      // latency p95 include dropped panel calls too.
+      await sql`
+        INSERT INTO harness_runs (user_id, panel_id, harness, model, prompt_tokens, completion_tokens, latency_ms, status, error)
+        VALUES (${data.userId}::uuid, ${data.panelId}::uuid, 'openai', ${model?.external_id ?? "unknown"},
+                ${Math.ceil(promptChars / 4)}, 0, ${Date.now() - streamStart}, 'error', ${message.slice(0, 500)})
+      `.catch((e) => rawConsole.warn("[ws] harness_runs error insert failed:", (e as Error).message));
       // Persist a synthetic assistant message so the error is visible in
       // the thread and doesn't leave the user staring at "thinking".
       const eRows = await sql<{ id: string }[]>`

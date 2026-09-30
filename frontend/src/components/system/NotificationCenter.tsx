@@ -130,7 +130,7 @@ export function NotificationCenter() {
         <BellIcon size={16} />
         {unread > 0 && (
           <span
-            className="absolute -top-0.5 -right-0.5 mono-caps text-[9px] tabular-nums px-1 min-w-[16px] h-[16px] inline-flex items-center justify-center bg-rust text-text rounded-full"
+            className="absolute -top-0.5 -right-0.5 mono-caps text-[9px] tabular-nums px-1 min-w-[16px] h-[16px] inline-flex items-center justify-center bg-rust text-bg rounded-full"
             aria-hidden
           >
             {unread > 99 ? "99+" : unread}

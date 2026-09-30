@@ -33,8 +33,8 @@ export function SettingsPage() {
       ? ["account", "users", "websearch", "logs"]
       : ["account"];
   return (
-    <div className="p-6 max-w-[900px]">
-      <h2 className="font-display text-[20px] font-semibold text-text tracking-wide">
+    <div className="content-page-sm">
+      <h2 className="page-title">
         Settings
       </h2>
       <div className="text-textMuted text-[13px] mb-4">

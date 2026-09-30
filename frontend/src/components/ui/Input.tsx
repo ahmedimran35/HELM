@@ -21,7 +21,7 @@ export const Input = forwardRef<HTMLInputElement, Props>(function Input(
         ref={ref}
         id={inputId}
         {...rest}
-        className={`w-full h-9 bg-panelAlt border border-border text-text px-3 rounded-none font-mono text-[13px] placeholder:text-textFaint focus:border-brass ${className}`}
+        className={`w-full h-9 bg-panelAlt border border-border text-text px-3 rounded-md font-mono text-[13px] placeholder:text-textFaint transition-[border-color,box-shadow] duration-150 focus:border-brass focus:outline-none focus:shadow-[0_0_0_3px_rgb(var(--brass-rgb)/0.16)] ${className}`}
       />
       {hint && (
         <span className="block mono-caps text-[10px] text-textFaint mt-1">

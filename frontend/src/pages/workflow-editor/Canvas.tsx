@@ -45,6 +45,7 @@ import {
 } from "./helpers";
 import { MiniMap } from "./MiniMap";
 import { NodeView } from "./NodeView";
+import { useSvgTheme } from "./svg-theme";
 import type {
   NodeKind,
   NodeLogEntry,
@@ -83,6 +84,7 @@ interface ViewState {
 }
 
 export function Canvas(props: CanvasProps) {
+  const t = useSvgTheme();
   const {
     graph,
     selectedNodeId,
@@ -508,21 +510,21 @@ export function Canvas(props: CanvasProps) {
       >
         <defs>
           <marker id="arrow" viewBox="0 0 10 10" refX={9} refY={5} markerWidth={8} markerHeight={8} orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#4c9c90" />
+            <path d="M 0 0 L 10 5 L 0 10 z" fill={t.tealDark} />
           </marker>
           <marker id="arrow-selected" viewBox="0 0 10 10" refX={9} refY={5} markerWidth={8} markerHeight={8} orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#C9A227" />
+            <path d="M 0 0 L 10 5 L 0 10 z" fill={t.brass} />
           </marker>
           <marker id="arrow-pending" viewBox="0 0 10 10" refX={9} refY={5} markerWidth={8} markerHeight={8} orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#C9A227" />
+            <path d="M 0 0 L 10 5 L 0 10 z" fill={t.brass} />
           </marker>
           {[
-            { id: "trigger", color: "#C9A227" },
-            { id: "agent_run", color: "#4c9c90" },
-            { id: "panel_message", color: "#7a9cc9" },
-            { id: "http_post", color: "#b58a23" },
-            { id: "condition", color: "#9a7ad0" },
-            { id: "delay", color: "#7a7a7a" },
+            { id: "trigger", color: t.brass },
+            { id: "agent_run", color: t.tealDark },
+            { id: "panel_message", color: t.blue },
+            { id: "http_post", color: t.brassSoft },
+            { id: "condition", color: t.purple },
+            { id: "delay", color: t.gray },
           ].map((g) => (
             <linearGradient key={g.id} id={`grad-${g.id}`} x1="0%" y1="0%" x2="0%" y2="100%">
               <stop offset="0%" stopColor={g.color} stopOpacity={0.35} />
@@ -546,7 +548,7 @@ export function Canvas(props: CanvasProps) {
             const d = edgePath(from, toPt);
             const isSelected = e.id === selectedEdgeId;
             const hasCond = !!e.condition;
-            const stroke = isSelected ? "#C9A227" : hasCond ? "#b58a23" : "#4c9c90";
+            const stroke = isSelected ? t.brass : hasCond ? t.brassSoft : t.tealDark;
             return (
               <g
                 key={e.id}
@@ -593,7 +595,7 @@ export function Canvas(props: CanvasProps) {
                         width={labelWidth}
                         height={14}
                         rx={7}
-                        fill="#14171d"
+                        fill={t.border}
                         stroke={stroke}
                         strokeWidth={0.8}
                         opacity={0.95}
@@ -603,7 +605,7 @@ export function Canvas(props: CanvasProps) {
                         y={cy - 10}
                         textAnchor="middle"
                         fontSize={10}
-                        fill="#e6e6e6"
+                        fill={t.text}
                         style={{ pointerEvents: "none" }}
                       >
                         {e.label || (e.condition ? `${e.condition.op}` : "")}
@@ -625,14 +627,14 @@ export function Canvas(props: CanvasProps) {
               <g>
                 <path
                   d={d}
-                  stroke="#C9A227"
+                  stroke={t.brass}
                   strokeWidth={2}
                   strokeDasharray="6 4"
                   fill="none"
                   opacity={0.85}
                 />
-                <circle cx={pendingEdge.x} cy={pendingEdge.y} r={8} fill="#C9A227" opacity={0.25} />
-                <circle cx={pendingEdge.x} cy={pendingEdge.y} r={4} fill="#C9A227" />
+                <circle cx={pendingEdge.x} cy={pendingEdge.y} r={8} fill={t.brass} opacity={0.25} />
+                <circle cx={pendingEdge.x} cy={pendingEdge.y} r={4} fill={t.brass} />
               </g>
             );
           })()}
@@ -674,10 +676,11 @@ export function Canvas(props: CanvasProps) {
 }
 
 function CornerBrackets() {
+  const t = useSvgTheme();
   // Four small brass L-brackets at the corners of the visible canvas.
   const L = 14;
   const T = 2;
-  const C = "#C9A227";
+  const C = t.brass;
   const corners = [
     { x: 8, y: 8, dx: 1, dy: 1 },
     { x: `calc(100% - 8px)`, y: 8, dx: -1, dy: 1 },
