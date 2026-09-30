@@ -1,6 +1,6 @@
 # HELM
 
-> **A full-stack governed AI workspace**: chat, multiplayer panels, a visual workflow editor, voice capture, browser automation, knowledge graph, skills, memory, marketplace, app bundles, sandbox, Slack, OAuth, web search, and live ops — all in one codebase, all TypeScript, all self-hostable, MIT licensed.
+> **A full-stack governed AI workspace**: chat, multiplayer panels, a visual workflow editor, an experimental multi-model swarm, skills, memory, marketplace, app bundles, sandbox, OAuth, web search, approvals, spend caps, and live ops — all in one codebase, all TypeScript, all self-hostable, MIT licensed.
 >
 > One Postgres. One binary. One role-aware UI.
 
@@ -62,7 +62,7 @@ It is **not** a thin wrapper over OpenAI. HELM ships:
 ### Local dev (Docker)
 
 ```bash
-git clone https://github.com/your-org/helm.git
+git clone https://github.com/ahmedimran35/HELM.git
 cd helm
 cp .env.example .env
 # REQUIRED: set a strong admin password in .env before first boot —
@@ -70,15 +70,21 @@ cp .env.example .env
 # a critical hole on any deployed stack).
 echo "ADMIN_PASSWORD=$(openssl rand -base64 24)" >> .env
 docker compose up -d
-# visit http://localhost:5173 — log in with admin@helm.local / the password in .env
+# visit http://localhost:8080 — log in with admin@helm.local / the password in .env
 ```
 
-The backend binds to `:3000`, the frontend to `:5173`. The first boot automatically:
+The API binds to `:3000`; the Docker frontend serves the built SPA on
+`:8080` (`:5173` is only the native Vite dev server). The first boot
+automatically:
 
-1. Runs all 17 SQL migrations
-2. Creates the first admin from `ADMIN_USERNAME` / `ADMIN_PASSWORD`
+1. Runs all 18 SQL migrations
+2. Creates the first admin from `ADMIN_USERNAME` / `ADMIN_PASSWORD` (skipped if users already exist)
 3. Seeds skill packs, marketplace entries, and demo apps
 4. Auto-configures the bundled `lightpanda` browser as the web search provider
+
+The env-bootstrapped admin is created with `must_change_password=true`,
+so the first login forces a password change — the .env secret is assumed
+leaked by being in the deployment manifest.
 
 ### Local dev (native)
 
@@ -102,14 +108,17 @@ Open http://localhost:5173.
 
 ### First-boot setup
 
-On a fresh install, the wizard at `/setup` lets you:
+Starting with zero users, the backend auto-creates the first admin from
+`ADMIN_USERNAME` / `ADMIN_PASSWORD` (see bootstrap above) and that
+account must change its password on first login. The in-app wizard at
+`/setup` additionally lets you:
 
-- Create the first admin (or use the env-typed one)
 - Add an LLM provider (OpenAI / Anthropic / OpenAI-compatible)
 - Configure the live web search provider (defaults to local lightpanda)
 - Invite initial team members
 
-Subsequent boots go straight to `/login`.
+Once any user exists, boots go straight to `/login` (and stale
+`ADMIN_*` env values are ignored).
 
 ---
 
@@ -132,7 +141,7 @@ Bun + Hono on port 3000. Single binary, single SQL connection pool, single WebSo
 │  • requireAuth                                          │
 │  • rateLimit (Redis / mem)                              │
 │  ┌──────────────────────────────────────────────────┐  │
-│  │ Routes ── 45 modules ── 200 endpoints            │  │
+│  │ Routes ── 39 modules ── 200 endpoints            │  │
 │  └──────────────────────────────────────────────────┘  │
 │  ┌──────────────────────┐  ┌───────────────────┐      │
 │  │ Lib ── 34 modules     │  │ Harness / WS       │      │
@@ -186,7 +195,7 @@ After the first visit, navigating to a new page only downloads that page's chunk
 
 ### Visual workflow editor
 
-Hand-rolled SVG editor (no `react-flow` dep). ~4.0k LoC across 14 files.
+Hand-rolled SVG editor (no `react-flow` dep). ~4.0k LoC across 15 files.
 
 - 6 node kinds: `trigger`, `agent_run`, `panel_message`, `http_post`, `condition`, `delay`
 - Drag-drop, pan/zoom, snap-to-grid (24 px)
@@ -247,8 +256,11 @@ SANDBOX-ISOLATION.md for the upgrade path.
 
 ### Voice + browser automation
 
-- **Voice** — MediaRecorder capture + Whisper transcription via OpenAI-compatible harness
-- **Browser** — small headless-browser driving a SideSheet, with `safeFetch` + URL allowlist
+- **Voice** — server-side audio transcription via an OpenAI-compatible
+  harness (`POST /api/files/:id/describe` → Whisper). Live microphone
+  capture UI and Text-to-Speech are not yet wired in the frontend.
+- **Browser** — the bundled headless `lightpanda` browser is used for
+  web search; there is no user-facing browser-driving UI.
 
 ### Memory + skills + marketplace
 
@@ -257,13 +269,20 @@ SANDBOX-ISOLATION.md for the upgrade path.
 - **Skills** — prompt / tool / workflow scopes, admin-gated promotion
 - **Marketplace** — apps, skills, agents, with reviews
 
+### Agents Swarm (experimental, admin-only)
+
+- Pick 2–10 governed models, ask one question
+- Every agent shares one web-search run, answers independently, scores its peers, debates in dynamic rounds (LLM consensus check each round, hard cap 10), then a separate synthesizer merges the strongest claims
+- Live force-directed swarm visualization, per-round timeline, and score table
+- Server-side history (`GET /api/swarm/runs`) with the final answer, model count, rounds, and status
+
 ### Live ops
 
 - **Provider health** — real-time reachability of 14 popular AI providers (OpenAI, Anthropic, Google, Mistral, Cohere, Groq, Together, OpenRouter, Perplexity, DeepSeek, xAI, Hugging Face, Replicate, Fireworks). Results are cached for 30 s and refreshed on request; the probe endpoint itself requires no auth.
 - **Notifications** — smart feeds, per-user preferences
 - **Audit log** — every state-changing event with 90-day retention auto-pruner
 - **CSP report receiver** — browser reports CSP violations to `/api/csp-report` for monitoring
-- **Slack / PagerDuty / Discord webhook** — `HELM_ALERT_WEBHOOK_URL` triggers on lockouts, SSO failures, etc.
+- **Alerting webhook** — a single Slack-compatible incoming webhook via `HELM_ALERT_WEBHOOK_URL` (`{text, attachments}` payload). Triggers on lockouts, SSRF attempts, model-access escalation, etc.; PagerDuty / Discord / Mattermost work only if their URL accepts a Slack-shaped body.
 
 ---
 
@@ -277,7 +296,7 @@ helm/
 ├── CONTRIBUTING.md                    ← dev workflow
 ├── LICENSE                            ← MIT
 │
-├── backend/                           ← 140 .ts files, ~31k LoC
+├── backend/                           ← 139 .ts files, ~31k LoC
 │   ├── Dockerfile
 │   ├── package.json
 │   ├── scripts/                        ← bcrypt compat test, etc.
@@ -285,24 +304,25 @@ helm/
 │       ├── index.ts                    ← Hono entry, Bun.serve
 │       ├── config.ts
 │       ├── ws.ts                       ← WebSocket upgrade + panel rooms
-│       ├── db/                         ← postgres client + 17 migrations
+│       ├── db/                         ← postgres client + 18 migrations
 │       ├── auth/                       ← password, session, lockout, bootstrap
 │       ├── middleware/                 ← auth, security-headers, rate-limit, compress
-│       ├── routes/                     ← 45 modules, ~200 endpoints
+│       ├── routes/                     ← 39 modules, ~200 endpoints
 │       ├── lib/                        ← 34 modules (safe-fetch, alerts, …)
 │       ├── providers/                  ← LLM adapters + AES-256-GCM
 │       ├── harness/                    ← OpenAI / Anthropic / mock / pi / cli
 │       └── cli.ts                      ← dev CLI
 │
-├── frontend/                          ← 86 .ts/.tsx files, ~30k LoC
+├── frontend/                          ← 88 .ts/.tsx files, ~30k LoC
 │   ├── package.json
 │   ├── vite.config.ts
 │   └── src/
 │       ├── main.tsx, App.tsx
-│       ├── pages/                      ← 40 page components (lazy-loaded)
-│       │   ├── workflow-editor/        ← 14 files, ~4.0k LoC, hand-rolled SVG
+│       ├── pages/                      ← page components (lazy-loaded)
+│       │   ├── workflow-editor/        ← 15 files, ~4.0k LoC, hand-rolled SVG
+│       │   ├── swarm/                  ← Agents Swarm canvas/timeline/scores/picker
 │       │   ├── Panels.tsx, Chat.tsx, Providers.tsx, Health.tsx
-│       │   └── … (36 more)
+│       │   └── … (more)
 │       ├── components/                 ← UI + system + shell
 │       ├── theme/                      ← ThemeProvider (light/dark)
 │       ├── styles/                     ← CSS tokens + animations
@@ -320,7 +340,7 @@ helm/
 └── apps-bundles/                     ← marketplace app bundles (HTML/JS)
 ```
 
-**Total**: ~61k LoC across 226 .ts/.tsx files + 17 migrations.
+**Total**: ~61k LoC across 227 .ts/.tsx files + 18 migrations.
 
 ---
 
@@ -334,7 +354,7 @@ cd backend
 bun install
 bun run dev              # dev server with --watch
 bun run typecheck        # tsc --noEmit
-bun test                 # 107 tests across 11 files
+bun test                 # tests across 12 files (run `bun test` to see current totals)
 bun run test:bcrypt      # bcrypt 2.x → 3.x compatibility check
 bun run build            # production bundle
 
@@ -354,7 +374,7 @@ cd backend && bun run db:migrate
 
 ### Testing
 
-107 tests across 11 files covering:
+Tests across 12 files covering:
 
 - `crypto.ts` — AES-256-GCM, AAD binding, v1/v2 transition, malformed input
 - `response-cache.ts` — hash, per-scope, expires_at, TTL kill switch
@@ -363,17 +383,15 @@ cd backend && bun run db:migrate
 - `panels.ts` — IDOR guards (admin bypass, member-only routes)
 - `role.ts` — auth + admin middleware
 - `workflow-runner.ts` — graph validation + condition predicates
+- `sandbox.ts` — exec isolation gate, symlink / traversal rejection
+- `openai.ts` — OpenAI harness request/response shaping
+- `metrics.ts` — counter/gauge accounting
+- `sources-injection.ts` — web-search source citation injection
 - `_contract.ts` — authz contract matrix (anonymous / user / admin per route)
 
 Note: two `safe-fetch` cases fail without outbound DNS (they resolve
-`example.com`); they pass on a networked host.
-
-```bash
-$ cd backend && bun test
- 105 pass
- 2 fail   # DNS-dependent; see above
- 177 expect() calls
-```
+`example.com`); they pass on a networked host. Run `bun test` for current
+pass/fail totals rather than relying on numbers pinned here.
 
 ### Code style
 
@@ -459,7 +477,7 @@ See [HARDENING.md](./HARDENING.md) for the full recipe:
 | Endpoint | Auth | Purpose |
 |---|---|---|
 | `GET /api/health` | none | Liveness probe |
-| `GET /api/health/deep` | none | Readiness — probes postgres + redis + lightpanda |
+| `GET /api/health/deep` | none | Readiness — probes postgres, plus redis (only when `REDIS_URL` is set) and lightpanda (only when an HTTP daemon URL is configured; CLI mode is treated as OK) |
 | `GET /api/health/providers/popular` | none | Real-time reachability of 14 popular AI providers |
 | `GET /api/health/harnesses` | session | Per-harness status + latency |
 | `GET /api/health/harnesses/:kind/models` | session | Per-harness model list |
@@ -477,7 +495,7 @@ HELM is designed for hostile-network deployments. The security posture is docume
 3. **Session** — `__Host-` prefix + `SameSite=Strict` cookie + IP-bind option (`HELM_SESSION_IP_BIND=1`)
 4. **CSRF** — `__Host-` cookie + `originGuard` middleware blocks cross-origin POSTs
 5. **SSRF** — `safeFetch` with DNS re-resolve, private-IP block, 5 MB body cap, `redirect: manual`
-6. **Auth** — bcrypt cost 4-15 (env-driven) + 5-attempt lockout + Slack/PagerDuty alert
+6. **Auth** — bcrypt cost 4-15 (env-driven) + 5-attempt lockout + alerting webhook
 7. **Encryption at rest** — AES-256-GCM with AAD context binding + versioned ciphertext (`v1:` / `v2:`) for forward-compatible key rotation
 8. **Rate limit** — per-IP + per-username bucket; Redis-backed Lua-atomic; in-memory fallback
 9. **Audit** — every state-changing event logged with actor + target + metadata; 90-day retention
@@ -486,7 +504,7 @@ HELM is designed for hostile-network deployments. The security posture is docume
 ### What we don't have (yet)
 
 - **SOC2 / HIPAA / GDPR** — no formal audit. ROI TBD.
-- **SAML / SSO** — only cookie session + password.
+- **SAML / SSO** — no SAML; OAuth login/link exists for Google, GitHub, and Microsoft (env-configured, self-service signup opt-in via `OAUTH_ALLOW_SIGNUP`).
 - **Multi-region / data residency** — single Postgres.
 - **Mobile app** — none.
 - **Tenant impersonation audit** — admins can act as users but no audit trail.
@@ -560,7 +578,7 @@ See [SECURITY.md](./SECURITY.md).
 | **Web framework** | Hono 4 | Fastify |
 | **Frontend** | React 18 + Vite | Lit + Vite |
 | **Database** | Postgres 16 | Postgres 14+ |
-| **Visual workflow editor** | ✅ ~3,977 LoC, hand-rolled SVG | ❌ |
+| **Visual workflow editor** | ✅ ~4.0k LoC, hand-rolled SVG | ❌ |
 | **Slack first-class** | Future plugin | ✅ |
 | **Standout feature** | **Visual workflow editor** | **Slack-first** |
 | **Stars** | new | ~13k |
